@@ -10,7 +10,8 @@
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);font:16px/1.5 "Noto Sans TC",system-ui,sans-serif;
   padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);display:flex;flex-direction:column}
-header{padding:14px 18px 6px}
+header{padding:14px 18px 6px;position:relative}
+#mode{position:absolute;right:14px;top:14px;padding:6px 12px;font-size:13px}
 h1{font-size:20px;margin:0;font-weight:800;letter-spacing:.02em}
 #status{color:var(--sub);font-size:13px;min-height:20px;margin-top:2px}
 main{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 18px 18px;gap:12px}
@@ -29,6 +30,8 @@ main{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 18px 18p
   background:rgba(255,210,63,.85);box-shadow:0 0 0 3px rgba(0,0,0,.3)}
 .checker{background:conic-gradient(#1c2b38 25%,#233443 0 50%,#1c2b38 0 75%,#233443 0) 0 0/24px 24px}
 #result{filter:none}
+#editCanvas{position:absolute;max-width:100%;max-height:100%;display:none;touch-action:none;cursor:crosshair;z-index:4}
+#editHint{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:5;display:none;background:rgba(11,20,28,.82);padding:7px 12px;border-radius:999px;color:var(--ink);font-size:13px;white-space:nowrap}
 .bar{display:flex;gap:10px;align-items:center}
 button,label.btn{font:inherit;font-weight:700;border:0;border-radius:999px;padding:13px 20px;cursor:pointer;
   background:var(--line);color:var(--ink);text-align:center}
@@ -60,7 +63,7 @@ button:focus-visible,label.btn:focus-within{outline:3px solid var(--acc);outline
 </head>
 <body>
 <header>
-  <h1>貼紙製造機</h1>
+  <h1>貼紙製造機</h1><button id="mode" type="button" title="切換去背模式"></button>
   <div id="status">準備中…</div>
 </header>
 <main>
@@ -68,6 +71,8 @@ button:focus-visible,label.btn:focus-within{outline:3px solid var(--acc);outline
     <div id="cam"><video id="video" playsinline muted autoplay></video>
       <div id="frame"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i><i class="dot"></i></div></div>
     <canvas id="result" class="hide"></canvas>
+    <canvas id="editCanvas"></canvas>
+    <div id="editHint">塗掉多餘的地方；長按／滑動即可修改</div>
     <div class="spin" id="spin"><span id="spinTxt">處理中…</span></div>
     <div id="bar"></div>
   </div>
@@ -85,8 +90,16 @@ button:focus-visible,label.btn:focus-within{outline:3px solid var(--acc);outline
   </div>
   <div class="bar hide" id="resBar">
     <button id="retake">重拍</button>
+    <button id="edit">✏️ 手動修整</button>
     <button id="save">下載</button>
     <button class="main" id="alive">賦予生命</button>
+  </div>
+  <div class="bar hide" id="editBar">
+    <button id="erase">🧹 擦除</button>
+    <button id="restore">🖌 恢復</button>
+    <button id="undo">↩ 復原</button>
+    <label style="display:flex;align-items:center;gap:8px;flex:1;color:var(--sub);font-size:13px">筆刷 <input id="brush" type="range" min="8" max="100" value="32" style="flex:1;accent-color:var(--acc)"><span id="brushV">32</span></label>
+    <button id="doneEdit" class="main">完成</button>
   </div>
 </main>
 
@@ -126,18 +139,28 @@ const OUT_SIDE = 512;           // 最終貼紙長邊
 const MODEL_ID = "Xenova/slimsam-77-uniform";
 const $ = id => document.getElementById(id);
 const setStatus = t => $("status").textContent = t;
+const LS = { get:k=>{try{return localStorage.getItem(k)}catch{return null}},
+  set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}, del:k=>{try{localStorage.removeItem(k)}catch{}} };
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
+let mode = LS.get("segMode") || (IS_IOS ? "light" : "ai");     // light＝輕量；cloud＝Cloudflare/雲端去背；ai＝手機 SlimSAM
+let crashed = false;
+if(LS.get("segRun")){ crashed = true; LS.del("segRun"); mode = "light"; LS.set("segMode","light"); }   // 上次剪裁到一半頁面就消失＝當機
+const MODE_LABEL = { light:"模式：輕量", cloud:"模式：雲端 AI", ai:"模式：本機 AI" };
+const paintMode = () => $("mode").textContent = MODE_LABEL[mode] || MODE_LABEL.light;
 addEventListener("error", e => setStatus("錯誤：" + (e.message||e)));
 addEventListener("unhandledrejection", e => setStatus("錯誤：" + (e.reason?.message||e.reason)));
 
 /* ---------- 載入 SlimSAM（首次下載，之後走瀏覽器快取） ---------- */
 env.allowLocalModels = false;
 try{ env.backends.onnx.wasm.numThreads = 1; }catch{}
-let model, processor;
-async function loadModel(){
+let model, processor, loading=null;
+const SESS = { enableCpuMemArena:false, enableMemPattern:false };   // 推論完就還記憶體
+function loadModel(){ if(model&&processor) return Promise.resolve(); return loading ||= _loadModel().finally(()=>{loading=null}); }
+async function _loadModel(){
   setStatus("下載分割模型…（第一次較久）");
   const cb = p => { if(p.status==="progress") $("bar").style.width = p.progress+"%"; };
-  try{ model = await SamModel.from_pretrained(MODEL_ID,{dtype:"q8",progress_callback:cb}); }
-  catch(e){ console.warn("q8 失敗，改用預設精度",e); model = await SamModel.from_pretrained(MODEL_ID,{progress_callback:cb}); }
+  try{ model = await SamModel.from_pretrained(MODEL_ID,{dtype:"q8",progress_callback:cb,session_options:SESS}); }
+  catch(e){ console.warn("q8 失敗，改用預設精度",e); model = await SamModel.from_pretrained(MODEL_ID,{progress_callback:cb,session_options:SESS}); }
   processor = await AutoProcessor.from_pretrained(MODEL_ID);
   $("bar").style.width = "0";
   setStatus("模型就緒，把主體放進框內，按下快門");
@@ -147,7 +170,7 @@ async function loadModel(){
 let stream, starting=null, wantCam=true;
 function startCam(){
   wantCam = true;
-  if(stream?.active) return Promise.resolve();
+  if(stream?.active){ $("video").play?.().catch(()=>{}); return Promise.resolve(); }
   if(starting) return starting;                       // 已經在要權限／開啟中，不要重複呼叫
   starting = (async()=>{
     try{
@@ -256,6 +279,123 @@ let photo, curMask=null, mW=0, mH=0, cutCanvas=null;
 const spin = (on,t) => { $("spin").style.display = on ? "flex":"none"; if(t) $("spinTxt").textContent=t; };
 const R = $("result");
 
+async function cloudRemoveBackground(){
+  const blob = await new Promise((resolve,reject)=>{
+    photo.toBlob(b=>b ? resolve(b) : reject(new Error("無法建立照片資料")), "image/jpeg", 0.82);
+  });
+  const form = new FormData();
+  form.append("image", blob, "camera.jpg");
+  const t0 = performance.now();
+  const res = await fetch("https://sticker.leepeng20000414.workers.dev/remove-bg", {
+    method:"POST",
+    body:form
+  });
+  if(!res.ok){
+    let msg = await res.text();
+    try{ const j=JSON.parse(msg); msg=j.detail||j.error||msg; }catch{}
+    throw new Error(msg || `雲端去背失敗（HTTP ${res.status}）`);
+  }
+  const blobOut = await res.blob();
+  const bmp = await createImageBitmap(blobOut);
+  const c = mkC(bmp.width,bmp.height), x=c.getContext("2d");
+  x.imageSmoothingQuality="high";
+  x.drawImage(bmp,0,0);
+  bmp.close?.();
+  const sec=((performance.now()-t0)/1000).toFixed(1);
+  const model=res.headers.get("X-Model-Used");
+  const remaining=res.headers.get("X-RateLimit-Remaining");
+  return {canvas:c, sec, model, remaining};
+}
+
+/* ---------- 手動修整：直接在透明去背結果上擦除／恢復 ---------- */
+let editMode=false, editTool="erase", editHistory=[], editDrawing=false, editLast=null;
+const EC=$("editCanvas"), ECTX=EC.getContext("2d");
+function syncEditCanvas(){
+  if(!cutCanvas) return;
+  EC.width=cutCanvas.width; EC.height=cutCanvas.height;
+  ECTX.clearRect(0,0,EC.width,EC.height);
+  ECTX.drawImage(cutCanvas,0,0);
+  const sw=$("stage").clientWidth, sh=$("stage").clientHeight;
+  const scale=Math.min(1, sw/cutCanvas.width, sh/cutCanvas.height);
+  EC.style.width=Math.max(1,Math.round(cutCanvas.width*scale))+"px";
+  EC.style.height=Math.max(1,Math.round(cutCanvas.height*scale))+"px";
+}
+function pushEditHistory(){
+  if(!cutCanvas) return;
+  if(editHistory.length>=8) editHistory.shift();
+  editHistory.push(ECTX.getImageData(0,0,EC.width,EC.height));
+}
+function applyEditHistory(){
+  const img=editHistory.pop();
+  if(!img) return;
+  ECTX.putImageData(img,0,0);
+  cutCanvas.width=EC.width; cutCanvas.height=EC.height;
+  cutCanvas.getContext("2d").drawImage(EC,0,0);
+  render();
+  syncEditCanvas();
+}
+function editPoint(ev){
+  const r=EC.getBoundingClientRect();
+  return {x:(ev.clientX-r.left)*(EC.width/r.width),y:(ev.clientY-r.top)*(EC.height/r.height)};
+}
+function paintAt(a,b){
+  const brush=+$('brush').value;
+  ECTX.save();
+  ECTX.globalCompositeOperation=editTool==="erase"?"destination-out":"source-over";
+  if(editTool==="restore"){
+    ECTX.globalCompositeOperation="source-over";
+    const dx=b.x-a.x, dy=b.y-a.y;
+    const dist=Math.hypot(dx,dy), steps=Math.max(1,Math.ceil(dist/(brush*.35)));
+    for(let i=0;i<=steps;i++){
+      const t=i/steps, x=a.x+dx*t, y=a.y+dy*t;
+      ECTX.save();
+      ECTX.beginPath();
+      ECTX.arc(x,y,brush/2,0,Math.PI*2);
+      ECTX.clip();
+      ECTX.drawImage(originalCutSource,0,0);
+      ECTX.restore();
+    }
+    ECTX.restore();
+    return;
+  }
+  ECTX.strokeStyle="#000"; ECTX.lineWidth=brush; ECTX.lineCap="round"; ECTX.lineJoin="round";
+  ECTX.beginPath(); ECTX.moveTo(a.x,a.y); ECTX.lineTo(b.x,b.y); ECTX.stroke();
+  ECTX.restore();
+}
+let originalCutSource=null;
+function openEditor(){
+  if(!cutCanvas) return;
+  originalCutSource=mkC(cutCanvas.width,cutCanvas.height);
+  originalCutSource.getContext("2d").drawImage(cutCanvas,0,0);
+  editHistory=[]; editMode=true; editTool="erase";
+  R.classList.add("hide"); EC.style.display="block"; $("editHint").style.display="block";
+  $("resBar").classList.add("hide"); $("editBar").classList.remove("hide");
+  syncEditCanvas();
+  setStatus("手動修整：塗掉多餘的地方");
+}
+function closeEditor(){
+  if(!editMode) return;
+  editMode=false;
+  cutCanvas=mkC(EC.width,EC.height);
+  cutCanvas.getContext("2d").drawImage(EC,0,0);
+  EC.style.display="none";
+  R.classList.remove("hide"); $("editHint").style.display="none";
+  $("editBar").classList.add("hide"); $("resBar").classList.remove("hide");
+  render();
+  setStatus("修整完成");
+}
+EC.addEventListener("pointerdown",e=>{ if(!editMode)return; e.preventDefault(); EC.setPointerCapture?.(e.pointerId); pushEditHistory(); editDrawing=true; editLast=editPoint(e); paintAt(editLast,editLast); });
+EC.addEventListener("pointermove",e=>{ if(!editDrawing)return; e.preventDefault(); const p=editPoint(e); paintAt(editLast,p); editLast=p; });
+EC.addEventListener("pointerup",e=>{ editDrawing=false; editLast=null; });
+EC.addEventListener("pointercancel",e=>{ editDrawing=false; editLast=null; });
+$("edit").onclick=openEditor;
+$("doneEdit").onclick=closeEditor;
+$("erase").onclick=()=>{editTool="erase";setStatus("手動修整：擦除模式");};
+$("restore").onclick=()=>{editTool="restore";setStatus("手動修整：恢復模式");};
+$("undo").onclick=()=>{if(editHistory.length)applyEditHistory();};
+$("brush").oninput=()=>$("brushV").textContent=$("brush").value;
+window.addEventListener("resize",()=>{if(editMode)syncEditCanvas();});
+
 async function autoSegment(){
   const inputs = await processor(RawImage.fromCanvas(photo));
   const embeds = await model.get_image_embeddings(inputs);
@@ -270,6 +410,39 @@ async function autoSegment(){
   curMask = masks[0].data.slice(best*mH*mW,(best+1)*mH*mW);   // 複製一份，才能安全釋放原 tensor
   for(const t of [inputs.pixel_values, embeds.image_embeddings, embeds.image_positional_embeddings, out.pred_masks, out.iou_scores, masks[0]])
     try{ t?.dispose?.(); }catch{}
+}
+
+/* ---------- 輕量剪裁：不用 AI、幾乎不吃記憶體。從取景框邊緣往內「洗掉」相近的背景色 ---------- */
+function lightSegment(){
+  const N=256, c=mkC(N,N), cx=c.getContext("2d"); cx.imageSmoothingQuality="high"; cx.drawImage(photo,0,0,N,N);
+  const d=cx.getImageData(0,0,N,N).data, n=N*N, E=5;
+  const edge=i=>{const x=i%N,y=(i/N)|0; return x<E||y<E||x>=N-E||y>=N-E;};
+  let mr=0,mg=0,mb=0,k=0;
+  for(let i=0;i<n;i++) if(edge(i)){mr+=d[i*4];mg+=d[i*4+1];mb+=d[i*4+2];k++;}
+  mr/=k; mg/=k; mb/=k;
+  const dm=i=>Math.hypot(d[i*4]-mr,d[i*4+1]-mg,d[i*4+2]-mb);
+  const st=(i,j)=>Math.hypot(d[i*4]-d[j*4],d[i*4+1]-d[j*4+1],d[i*4+2]-d[j*4+2]);
+  let sd=0; for(let i=0;i<n;i++) if(edge(i)) sd+=dm(i); sd/=k;
+  const TMAX=Math.min(130,Math.max(60,sd*2.5+40)), STEP=Math.min(40,18+sd*.3);
+  const nb=(i)=>{const x=i%N,y=(i/N)|0,a=[]; if(x>0)a.push(i-1); if(x<N-1)a.push(i+1); if(y>0)a.push(i-N); if(y<N-1)a.push(i+N); return a;};
+  const bg=new Uint8Array(n), q=new Int32Array(n); let h=0,t=0;
+  for(let i=0;i<n;i++) if(edge(i)&&dm(i)<TMAX){bg[i]=1;q[t++]=i;}
+  while(h<t){ const i=q[h++]; for(const j of nb(i)) if(!bg[j]&&st(i,j)<STEP&&dm(j)<TMAX){bg[j]=1;q[t++]=j;} }
+  const lab=new Int32Array(n); let best=0,bestId=0,id=0;
+  for(let s=0;s<n;s++){
+    if(bg[s]||lab[s]) continue;
+    id++; h=0; t=0; q[t++]=s; lab[s]=id; let cnt=0;
+    while(h<t){ const i=q[h++]; cnt++; for(const j of nb(i)) if(!bg[j]&&!lab[j]){lab[j]=id;q[t++]=j;} }
+    if(cnt>best){best=cnt;bestId=id;}
+  }
+  const m=new Uint8Array(n); for(let i=0;i<n;i++) m[i]=lab[i]===bestId?1:0;
+  const ratio=best/n, ok = ratio>=.03 && ratio<=.9;
+  if(!ok){                                             // 背景太雜或主體跟背景同色：改用取景框圓角方形
+    const r=mkC(N,N), x=r.getContext("2d"), a=N*.06, b=N*.94, rad=N*.2;
+    x.beginPath(); x.moveTo(a+rad,a); x.arcTo(b,a,b,b,rad); x.arcTo(b,b,a,b,rad); x.arcTo(a,b,a,a,rad); x.arcTo(a,a,b,a,rad); x.closePath(); x.fill();
+    const dd=x.getImageData(0,0,N,N).data; for(let i=0;i<n;i++) m[i]=dd[i*4+3]>127?1:0;
+  }
+  mW=N; mH=N; curMask=m; return ok;
 }
 
 /* ---------- 遮罩 → 透明主體（已裁切） ---------- */
@@ -301,26 +474,37 @@ function render(){
 /* ---------- 拍攝 → 直接產生貼紙 ---------- */
 let busy=false;
 async function run(p){
-  if(!model){ setStatus("模型還在載入，請稍候"); return; }
+  if(mode==="ai" && !model){ setStatus("本機 AI 模型還在載入，請稍候"); loadModel().catch(e=>setStatus("模型載入失敗："+(e.message||e))); return; }
   if(busy) return; busy=true;
-  photo=p; spin(true,"剪下主體中…");
-  stopCam();                                        // 推論前先釋放相機串流，降低記憶體壓力
-  await new Promise(r=>setTimeout(r,60));           // 讓畫面先更新，再進入重運算
+  photo=p; spin(true, mode==="cloud" ? "雲端 AI 去背中…" : "剪下主體中…");
+  $("video").pause?.();
+  await new Promise(r=>setTimeout(r,60));
   try{
     const t0=performance.now();
-    await autoSegment();
-    cutCanvas=buildCut();
-    if(!cutCanvas){ setStatus("沒有偵測到主體，請把物體放進框內中央再拍一次"); spin(false); busy=false; startCam(); return; }
+    let note="";
+    if(mode==="cloud"){
+      const r=await cloudRemoveBackground();
+      cutCanvas=r.canvas;
+      note=`雲端 AI 完成，用時 ${r.sec} 秒`;
+      if(r.model) note += ` · ${r.model}`;
+      if(r.remaining) note += ` · 剩餘 ${r.remaining}`;
+    }else{
+      if(mode==="ai"){ LS.set("segRun","1"); await autoSegment(); LS.del("segRun"); }
+      else if(!lightSegment()) note="（背景太複雜，改用取景框範圍）";
+      cutCanvas=buildCut();
+      if(!cutCanvas){ setStatus("沒有偵測到主體，請把物體放進框內中央再拍一次"); spin(false); busy=false; startCam(); return; }
+      note=`完成${note}，用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒`;
+    }
     render();
     $("cam").classList.add("hide"); R.classList.remove("hide"); $("stage").classList.add("checker");
     $("camBar").classList.add("hide"); $("resBar").classList.remove("hide"); $("sliderRow").style.display="flex";
-    setStatus(`完成，用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒`);
+    setStatus(note);
   }catch(e){ console.error(e); setStatus("處理失敗："+(e.message||e)); startCam(); }
   spin(false); busy=false;
 }
 
 $("shoot").onclick = () => { const v=$("video"); if(v.videoWidth) run(frameCrop(v,v.videoWidth,v.videoHeight)); };
-$("file").addEventListener("click", () => stopCam());
+$("file").addEventListener("click", () => { if(!IS_IOS) stopCam(); });
 $("file").addEventListener("cancel", () => { if(camVisible() && !busy) startCam(); });
 async function decodeFile(f){
   try{ return await createImageBitmap(f,{imageOrientation:"from-image"}); }
@@ -393,7 +577,22 @@ $("send").onclick = async () => {
   btn.disabled=false; btn.textContent="送出，讓牠誕生";
 };
 
-startCam().then(() => loadModel()).catch(e => setStatus("模型載入失敗："+(e.message||e)));
+paintMode();
+$("mode").onclick = () => {
+  if(busy) return;
+  const next = mode==="light" ? "cloud" : mode==="cloud" ? "ai" : "light";
+  if(next==="ai" && IS_IOS && !confirm("本機 AI 會在手機瀏覽器內執行 SlimSAM，可能造成頁面當機。確定要測試嗎？")) return;
+  mode=next; LS.set("segMode",mode); paintMode();
+  if(mode==="cloud") setStatus("已切換為雲端 AI：拍照後送到 Cloudflare Worker 去背");
+  else if(mode==="ai") loadModel().catch(e=>setStatus("本機 AI 模型載入失敗："+(e.message||e)));
+  else setStatus("已切換為輕量模式：背景越單純效果越好");
+};
+startCam().then(() => {
+  if(crashed) setStatus("上次本機 AI 剪裁讓頁面當機，已改用輕量模式");
+  else if(mode==="ai") return loadModel();
+  else if(mode==="cloud") setStatus("雲端 AI 已就緒，把主體放進框內，按下快門");
+  else setStatus("把主體放進框內，按下快門（背景越單純效果越好）");
+}).catch(e => setStatus("相機啟動失敗："+(e.message||e)));
 </script>
 </body>
 </html>
