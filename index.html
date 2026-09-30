@@ -78,7 +78,7 @@ button:focus-visible,label.btn:focus-within{outline:3px solid var(--acc);outline
 
   <div class="bar" id="camBar">
     <label class="btn">相簿／系統相機
-      <input type="file" id="file" accept="image/*" capture="environment" class="hide">
+      <input type="file" id="file" accept="image/*" class="hide">
     </label>
     <button class="shutter" id="shoot" aria-label="拍攝"></button>
     <span style="width:120px"></span>
@@ -118,7 +118,7 @@ import { SamModel, AutoProcessor, RawImage, Tensor, env } from "https://cdn.jsde
 /* ---------- 設定 ---------- */
 // 到 Firebase 主控台 → 專案設定 → 你的應用程式（網頁），把 firebaseConfig 貼在這裡
 const FIREBASE_CONFIG = {
-  apiKey:"YAIzaSyCSYLJJYHMjqrl6KKC8lZE1rlnbcoZ5OPs", authDomain:"drawing-eeecb.firebaseapp.com", projectId:"drawing-eeecb",
+  apiKey:"AIzaSyCSYLJJYHMjqrl6KKC8lZE1rlnbcoZ5OPs", authDomain:"drawing-eeecb.firebaseapp.com", projectId:"drawing-eeecb",
   storageBucket:"drawing-eeecb.firebasestorage.app", messagingSenderId:"835181156249", appId:"1:835181156249:web:7d554f5f54d91742c5a508"
 };
 const MAX_SIDE = 1024;          // 送進模型的照片長邊
@@ -126,6 +126,8 @@ const OUT_SIDE = 512;           // 最終貼紙長邊
 const MODEL_ID = "Xenova/slimsam-77-uniform";
 const $ = id => document.getElementById(id);
 const setStatus = t => $("status").textContent = t;
+addEventListener("error", e => setStatus("錯誤：" + (e.message||e)));
+addEventListener("unhandledrejection", e => setStatus("錯誤：" + (e.reason?.message||e.reason)));
 
 /* ---------- 載入 SlimSAM（首次下載，之後走瀏覽器快取） ---------- */
 env.allowLocalModels = false;
@@ -149,7 +151,13 @@ async function startCam(){
     $("video").srcObject = stream;
   }catch(e){ setStatus("無法開啟相機，請改用左下角按鈕選照片（需 HTTPS）"); }
 }
-function stopCam(){ stream?.getTracks().forEach(t=>t.stop()); }
+function stopCam(){ stream?.getTracks().forEach(t=>t.stop()); stream=null; $("video").srcObject=null; }
+const camVisible = () => !$("cam").classList.contains("hide");
+// 切到系統相機／別的 App 時釋放相機，回來再開，避免相機被佔用或頁面被系統回收
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden) { if(!busy) stopCam(); }
+  else if(camVisible() && !stream?.active && !busy) startCam();
+});
 
 function frameToCanvas(src, w, h){
   const s = Math.min(1, MAX_SIDE / Math.max(w,h));
@@ -247,7 +255,9 @@ async function autoSegment(){
   const sc = out.iou_scores.data; let best=0;
   for(let i=1;i<3;i++) if(sc[i]>sc[best]) best=i;
   const d = masks[0].dims; mH=d[2]; mW=d[3];
-  curMask = masks[0].data.subarray(best*mH*mW,(best+1)*mH*mW);
+  curMask = masks[0].data.slice(best*mH*mW,(best+1)*mH*mW);   // 複製一份，才能安全釋放原 tensor
+  for(const t of [inputs.pixel_values, embeds.image_embeddings, embeds.image_positional_embeddings, out.pred_masks, out.iou_scores, masks[0]])
+    try{ t?.dispose?.(); }catch{}
 }
 
 /* ---------- 遮罩 → 透明主體（已裁切） ---------- */
@@ -282,24 +292,36 @@ async function run(p){
   if(!model){ setStatus("模型還在載入，請稍候"); return; }
   if(busy) return; busy=true;
   photo=p; spin(true,"剪下主體中…");
+  stopCam();                                        // 推論前先釋放相機串流，降低記憶體壓力
+  await new Promise(r=>setTimeout(r,60));           // 讓畫面先更新，再進入重運算
   try{
     const t0=performance.now();
     await autoSegment();
     cutCanvas=buildCut();
-    if(!cutCanvas){ setStatus("沒有偵測到主體，請把物體放進框內中央再拍一次"); spin(false); busy=false; return; }
-    stopCam(); render();
+    if(!cutCanvas){ setStatus("沒有偵測到主體，請把物體放進框內中央再拍一次"); spin(false); busy=false; startCam(); return; }
+    render();
     $("cam").classList.add("hide"); R.classList.remove("hide"); $("stage").classList.add("checker");
     $("camBar").classList.add("hide"); $("resBar").classList.remove("hide"); $("sliderRow").style.display="flex";
     setStatus(`完成，用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒`);
-  }catch(e){ console.error(e); setStatus("處理失敗："+e.message); }
+  }catch(e){ console.error(e); setStatus("處理失敗："+(e.message||e)); startCam(); }
   spin(false); busy=false;
 }
 
 $("shoot").onclick = () => { const v=$("video"); if(v.videoWidth) run(frameCrop(v,v.videoWidth,v.videoHeight)); };
+$("file").addEventListener("click", () => stopCam());
+$("file").addEventListener("cancel", () => { if(camVisible() && !busy) startCam(); });
+async function decodeFile(f){
+  try{ return await createImageBitmap(f,{imageOrientation:"from-image"}); }
+  catch{ const u=URL.createObjectURL(f), im=new Image(); im.src=u; await im.decode(); URL.revokeObjectURL(u);
+    return {width:im.naturalWidth,height:im.naturalHeight,src:im}; }
+}
 $("file").onchange = async e => {
-  const f=e.target.files[0]; if(!f) return;
-  const bmp = await createImageBitmap(f,{imageOrientation:"from-image"});
-  run(frameCrop(bmp,bmp.width,bmp.height)); e.target.value="";
+  const f=e.target.files[0]; if(!f){ if(camVisible()&&!busy) startCam(); return; }
+  try{
+    const b = await decodeFile(f), src = b.src || b;
+    await run(frameCrop(src,b.width,b.height));
+  }catch(err){ console.error(err); setStatus("讀取照片失敗："+(err.message||err)); startCam(); }
+  e.target.value="";
 };
 $("border").oninput = () => cutCanvas && render();
 $("retake").onclick = () => {

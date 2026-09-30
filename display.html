@@ -12,13 +12,15 @@ body{background:radial-gradient(ellipse at 50% 100%,#1d3142,var(--bg) 70%);color
   font:16px/1.5 "Noto Sans TC",system-ui,sans-serif}
 #empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--sub);font-size:20px}
 .char{position:absolute;left:0;top:0;width:var(--s);height:var(--s);transition:transform 6s ease-in-out;will-change:transform}
-.char img{width:100%;height:100%;object-fit:contain;display:block;transition:transform .4s}
+.char img{width:100%;height:100%;object-fit:contain;display:block;transition:transform .4s;
+  animation:bob 2.6s ease-in-out infinite;animation-delay:var(--d,0s)}
+@keyframes bob{50%{translate:0 -7px}}
 .char .nm{position:absolute;left:50%;bottom:-26px;transform:translateX(-50%);font-size:14px;font-weight:700;
   color:var(--ink);white-space:nowrap;text-shadow:0 1px 4px #000}
 .bubble{position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);width:max-content;max-width:260px;
   background:var(--ink);color:#1a1a1a;padding:10px 14px;border-radius:18px;font-size:15px;font-weight:500;display:none}
 .bubble::after{content:"";position:absolute;left:50%;top:100%;margin-left:-8px;border:8px solid transparent;border-top-color:var(--ink)}
-@media (prefers-reduced-motion:reduce){.char{transition-duration:.01s}}
+@media (prefers-reduced-motion:reduce){.char{transition-duration:.01s}.char img{animation:none}}
 </style>
 </head>
 <body>
@@ -36,7 +38,8 @@ const db = getFirestore(app);
 const S = Math.round(Math.min(170, innerWidth*.2));
 document.documentElement.style.setProperty("--s", S+"px");
 const rnd = (a,b)=>a+Math.random()*(b-a);
-const randPos = () => ({ x:rnd(10, innerWidth-S-10), y:rnd(innerHeight*.3, innerHeight-S-50) });
+const M = Math.min(50, Math.max(10,(innerWidth-S)/2-1));
+const randPos = () => ({ x:rnd(M, innerWidth-S-M), y:rnd(innerHeight*.3, innerHeight-S-50) });
 
 /* ---------- 自我介紹：先用句型組合。之後要接 AI，只需改這個函式 ---------- */
 const AI_URL = "https://sticker.leepeng20000414.workers.dev/";
@@ -59,10 +62,34 @@ async function getIntro(c){
 }
 
 /* ---------- 打字機 ---------- */
-function typeText(box, text){
+function typeText(box, text, speed=80, hold=5000){
+  clearInterval(box._t); clearTimeout(box._h);
   box.style.display="block"; box.textContent="";
-  let i=0; const t=setInterval(()=>{ box.textContent=text.slice(0,++i); if(i>=text.length) clearInterval(t); },80);
-  setTimeout(()=>box.style.display="none", text.length*80 + 5000);
+  let i=0; box._t=setInterval(()=>{ box.textContent=text.slice(0,++i); if(i>=text.length) clearInterval(box._t); },speed);
+  box._h=setTimeout(()=>box.style.display="none", text.length*speed + hold);
+}
+
+/* ---------- 隨口說的小句子：用當初輸入的名字、個性、喜好、補充組成 ---------- */
+const pickOne = a => a[Math.floor(Math.random()*a.length)];
+function makeChatter(c){
+  const P = [`我是${c.name}！`, `${c.name}在這裡～`];
+  (c.traits||[]).forEach(t => P.push(`我覺得自己很${t}～`, `${t}就是我！`));
+  (c.hobbies||[]).forEach(h => P.push(`好想${h}～`, `${h}最開心了！`));
+  if(c.extra){ P.push(c.extra, c.extra+"！", c.extra); }      // 自己寫的句子，多放幾份讓它更常出現
+  if(P.length < 4) P.push("有人要跟我玩嗎？", "今天天氣真好～");
+  return P;
+}
+function chatterLoop(el, c){
+  const pool = makeChatter(c), box = el.querySelector(".bubble"); let last = "";
+  (function next(first){
+    setTimeout(()=>{
+      if(box.style.display !== "block"){                       // 正在說話就跳過這次
+        let t, n=0; do{ t = pickOne(pool); }while(t===last && pool.length>1 && ++n<10);
+        last = t; typeText(box, t, 60, 3500);
+      }
+      next();
+    }, first ? rnd(1500,5000) : rnd(9000,20000));
+  })(true);
 }
 
 /* ---------- 角色 ---------- */
@@ -80,7 +107,7 @@ async function addChar(id, c, entrance){
   document.getElementById("empty")?.remove();
   const el = document.createElement("div"); el.className="char";
   el.innerHTML = `<img alt=""><div class="nm"></div><div class="bubble"></div>`;
-  el.querySelector("img").src = c.imageUrl;
+  el.querySelector("img").src = c.imageUrl; el.style.setProperty("--d", (-Math.random()*2.6).toFixed(2)+"s");
   el.querySelector(".nm").textContent = c.name;
   document.body.appendChild(el); els.set(id, el);
   const target = randPos();
@@ -90,11 +117,14 @@ async function addChar(id, c, entrance){
     moveTo(el, target);
     const intro = await getIntro(c);
     setTimeout(()=>typeText(el.querySelector(".bubble"), intro), 6200);
+    setTimeout(()=>chatterLoop(el,c), 14000);
+    setTimeout(()=>(function wander(){ setTimeout(()=>{ moveTo(el, randPos()); wander(); }, rnd(6000,11000)); })(), 7000);
   }else{
     el.style.transition="none"; el.style.transform=`translate(${target.x}px,${target.y}px)`; el.dataset.x=target.x;
     el.offsetWidth; el.style.transition="";
+    chatterLoop(el,c);
+    setTimeout(()=>(function wander(){ moveTo(el, randPos()); setTimeout(wander, rnd(6000,11000)); })(), rnd(200,2500));   // 剛進來就很快動起來
   }
-  (function wander(){ setTimeout(()=>{ moveTo(el, randPos()); wander(); }, rnd(8000,14000)); })();
 }
 
 /* ---------- 即時監聽 ---------- */
