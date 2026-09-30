@@ -131,6 +131,7 @@ addEventListener("unhandledrejection", e => setStatus("錯誤：" + (e.reason?.m
 
 /* ---------- 載入 SlimSAM（首次下載，之後走瀏覽器快取） ---------- */
 env.allowLocalModels = false;
+try{ env.backends.onnx.wasm.numThreads = 1; }catch{}
 let model, processor;
 async function loadModel(){
   setStatus("下載分割模型…（第一次較久）");
@@ -143,20 +144,31 @@ async function loadModel(){
 }
 
 /* ---------- 相機 ---------- */
-let stream;
-async function startCam(){
-  try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080} }, audio:false });
-    $("video").srcObject = stream;
-  }catch(e){ setStatus("無法開啟相機，請改用左下角按鈕選照片（需 HTTPS）"); }
+let stream, starting=null, wantCam=true;
+function startCam(){
+  wantCam = true;
+  if(stream?.active) return Promise.resolve();
+  if(starting) return starting;                       // 已經在要權限／開啟中，不要重複呼叫
+  starting = (async()=>{
+    try{
+      let st;
+      try{ st = await navigator.mediaDevices.getUserMedia({
+             video:{ facingMode:{ideal:"environment"}, width:{ideal:1280}, height:{ideal:720} }, audio:false }); }
+      catch(e){ if(e.name==="NotAllowedError"||e.name==="SecurityError") throw e;
+                st = await navigator.mediaDevices.getUserMedia({ video:true, audio:false }); }   // 條件太嚴格時退回最寬鬆設定
+      if(!wantCam){ st.getTracks().forEach(t=>t.stop()); return; }   // 等待期間已被要求關閉
+      stream = st; $("video").srcObject = st;
+      $("video").play?.().catch(()=>{});
+    }catch(e){ setStatus("無法開啟相機（"+(e.name||e.message)+"），請改用左下角按鈕選照片"); }
+    finally{ starting=null; }
+  })();
+  return starting;
 }
-function stopCam(){ stream?.getTracks().forEach(t=>t.stop()); stream=null; $("video").srcObject=null; }
+function stopCam(){ wantCam=false; stream?.getTracks().forEach(t=>t.stop()); stream=null; $("video").srcObject=null; }
 const camVisible = () => !$("cam").classList.contains("hide");
 // 切到系統相機／別的 App 時釋放相機，回來再開，避免相機被佔用或頁面被系統回收
 document.addEventListener("visibilitychange", () => {
-  if(document.hidden) { if(!busy) stopCam(); }
-  else if(camVisible() && !stream?.active && !busy) startCam();
+  if(!document.hidden && camVisible() && stream && !stream.active && !starting && !busy) startCam();   // 只有「原本有串流、被系統中斷」才重開
 });
 
 function frameToCanvas(src, w, h){
@@ -381,7 +393,7 @@ $("send").onclick = async () => {
   btn.disabled=false; btn.textContent="送出，讓牠誕生";
 };
 
-startCam(); loadModel().catch(e => setStatus("模型載入失敗："+e.message));
+startCam().then(() => loadModel()).catch(e => setStatus("模型載入失敗："+(e.message||e)));
 </script>
 </body>
 </html>
