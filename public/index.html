@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>貼紙製造機 · 影像測試</title>
+<style>
+:root{--bg:#14202b;--ink:#f3f0e8;--sub:#8fa3b3;--acc:#ffd23f;--line:#2a3b4a}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 "Noto Sans TC",system-ui,sans-serif;
+  padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);display:flex;flex-direction:column}
+header{padding:14px 18px 6px}
+h1{font-size:20px;margin:0;font-weight:800;letter-spacing:.02em}
+#status{color:var(--sub);font-size:13px;min-height:20px;margin-top:2px}
+main{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 18px 18px;gap:12px}
+.stage{flex:1;min-height:0;border-radius:20px;overflow:hidden;position:relative;background:#0b141c;
+  display:flex;align-items:center;justify-content:center}
+.stage video,.stage img,.stage canvas{max-width:100%;max-height:100%;display:block}
+#cam{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+#frame{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:60%;aspect-ratio:1;
+  box-shadow:0 0 0 999px rgba(11,20,28,.45);border-radius:22px;pointer-events:none}
+.corner{position:absolute;width:44px;height:44px;border:5px solid var(--acc)}
+.tl{left:0;top:0;border-right:0;border-bottom:0;border-top-left-radius:22px}
+.tr{right:0;top:0;border-left:0;border-bottom:0;border-top-right-radius:22px}
+.bl{left:0;bottom:0;border-right:0;border-top:0;border-bottom-left-radius:22px}
+.br{right:0;bottom:0;border-left:0;border-top:0;border-bottom-right-radius:22px}
+.dot{position:absolute;left:50%;top:50%;width:10px;height:10px;margin:-5px;border-radius:50%;
+  background:rgba(255,210,63,.85);box-shadow:0 0 0 3px rgba(0,0,0,.3)}
+.checker{background:conic-gradient(#1c2b38 25%,#233443 0 50%,#1c2b38 0 75%,#233443 0) 0 0/24px 24px}
+#result{filter:none}
+.bar{display:flex;gap:10px;align-items:center}
+button,label.btn{font:inherit;font-weight:700;border:0;border-radius:999px;padding:13px 20px;cursor:pointer;
+  background:var(--line);color:var(--ink);text-align:center}
+button.main{background:var(--acc);color:#1a1a1a;flex:1}
+button:disabled{opacity:.4}
+button:focus-visible,label.btn:focus-within{outline:3px solid var(--acc);outline-offset:2px}
+.shutter{width:72px;height:72px;padding:0;border-radius:50%;background:var(--ink);
+  border:5px solid var(--bg);box-shadow:0 0 0 3px var(--ink);margin:0 auto}
+.row{display:none;align-items:center;gap:12px;font-size:14px;color:var(--sub)}
+.row input{flex:1;accent-color:var(--acc)}
+.hide{display:none!important}
+#bar{position:absolute;left:0;bottom:0;height:4px;background:var(--acc);width:0;transition:width .2s}
+.spin{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+  background:rgba(11,20,28,.72);font-weight:700}
+#panel{position:fixed;inset:0;z-index:10;display:none;overflow:auto;background:rgba(11,20,28,.95);
+  padding:calc(env(safe-area-inset-top) + 24px) 20px calc(env(safe-area-inset-bottom) + 24px)}
+#panel .box{max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+#panel h2{font-size:22px;margin:0}
+#panel p{margin:0;color:var(--sub)}
+#panel .pv{width:140px;height:140px;object-fit:contain;margin:0 auto}
+.fld{display:flex;flex-direction:column;gap:8px;font-weight:700;font-size:14px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:2px solid var(--line);background:none;padding:7px 14px;font-weight:600}
+.chip.on{background:var(--acc);border-color:var(--acc);color:#1a1a1a}
+#panel input[type=text]{font:inherit;color:var(--ink);background:#0b141c;border:2px solid var(--line);
+  border-radius:14px;padding:11px 14px;width:100%}
+#panel input[type=text]:focus{outline:3px solid var(--acc);outline-offset:1px}
+</style>
+</head>
+<body>
+<header>
+  <h1>貼紙製造機</h1>
+  <div id="status">準備中…</div>
+</header>
+<main>
+  <div class="stage" id="stage">
+    <div id="cam"><video id="video" playsinline muted autoplay></video>
+      <div id="frame"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i><i class="dot"></i></div></div>
+    <canvas id="result" class="hide"></canvas>
+    <div class="spin" id="spin"><span id="spinTxt">處理中…</span></div>
+    <div id="bar"></div>
+  </div>
+
+  <div class="row" id="sliderRow">
+    <span>邊框</span><input type="range" id="border" min="0" max="40" value="16"><span id="bv">16</span>
+  </div>
+
+  <div class="bar" id="camBar">
+    <label class="btn">相簿／系統相機
+      <input type="file" id="file" accept="image/*" capture="environment" class="hide">
+    </label>
+    <button class="shutter" id="shoot" aria-label="拍攝"></button>
+    <span style="width:120px"></span>
+  </div>
+  <div class="bar hide" id="resBar">
+    <button id="retake">重拍</button>
+    <button id="save">下載</button>
+    <button class="main" id="alive">賦予生命</button>
+  </div>
+</main>
+
+<div id="panel" role="dialog" aria-modal="true"><div class="box">
+  <div id="v1"><div class="box">
+    <img class="pv" id="pv1" alt="貼紙預覽">
+    <h2>要讓牠活過來嗎？</h2><p>告訴我們牠是誰，牠就會出現在大螢幕上跟大家打招呼。</p>
+    <button class="main" id="yes">好，賦予生命</button><button id="no">先不要</button>
+  </div></div>
+  <div id="v2" class="hide"><div class="box">
+    <h2>牠是什麼樣的角色？</h2>
+    <div class="fld">名字<input type="text" id="nm" maxlength="12" placeholder="幫牠取個名字"></div>
+    <div class="fld">個性（可複選）<div class="chips" id="traits"></div></div>
+    <div class="fld">喜歡的事（可複選）<div class="chips" id="hobbies"></div></div>
+    <div class="fld">還想補充什麼<input type="text" id="extra" maxlength="40" placeholder="例如：最怕蟑螂"></div>
+    <button class="main" id="send">送出，讓牠誕生</button><button id="back">返回</button>
+  </div></div>
+  <div id="v3" class="hide"><div class="box">
+    <h2 id="doneT">牠誕生了！</h2><p id="doneP">看看大螢幕，牠正在路上。</p>
+    <button class="main" id="again">再做一個</button>
+  </div></div>
+</div></div>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+import { SamModel, AutoProcessor, RawImage, Tensor, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1";
+
+/* ---------- 設定 ---------- */
+// 到 Firebase 主控台 → 專案設定 → 你的應用程式（網頁），把 firebaseConfig 貼在這裡
+const FIREBASE_CONFIG = {
+  apiKey:"YAIzaSyCSYLJJYHMjqrl6KKC8lZE1rlnbcoZ5OPs", authDomain:"drawing-eeecb.firebaseapp.com", projectId:"drawing-eeecb",
+  storageBucket:"drawing-eeecb.firebasestorage.app", messagingSenderId:"835181156249", appId:"1:835181156249:web:7d554f5f54d91742c5a508"
+};
+const MAX_SIDE = 1024;          // 送進模型的照片長邊
+const OUT_SIDE = 512;           // 最終貼紙長邊
+const MODEL_ID = "Xenova/slimsam-77-uniform";
+const $ = id => document.getElementById(id);
+const setStatus = t => $("status").textContent = t;
+
+/* ---------- 載入 SlimSAM（首次下載，之後走瀏覽器快取） ---------- */
+env.allowLocalModels = false;
+let model, processor;
+async function loadModel(){
+  setStatus("下載分割模型…（第一次較久）");
+  const cb = p => { if(p.status==="progress") $("bar").style.width = p.progress+"%"; };
+  try{ model = await SamModel.from_pretrained(MODEL_ID,{dtype:"q8",progress_callback:cb}); }
+  catch(e){ console.warn("q8 失敗，改用預設精度",e); model = await SamModel.from_pretrained(MODEL_ID,{progress_callback:cb}); }
+  processor = await AutoProcessor.from_pretrained(MODEL_ID);
+  $("bar").style.width = "0";
+  setStatus("模型就緒，把主體放進框內，按下快門");
+}
+
+/* ---------- 相機 ---------- */
+let stream;
+async function startCam(){
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080} }, audio:false });
+    $("video").srcObject = stream;
+  }catch(e){ setStatus("無法開啟相機，請改用左下角按鈕選照片（需 HTTPS）"); }
+}
+function stopCam(){ stream?.getTracks().forEach(t=>t.stop()); }
+
+function frameToCanvas(src, w, h){
+  const s = Math.min(1, MAX_SIDE / Math.max(w,h));
+  const c = document.createElement("canvas");
+  c.width = Math.round(w*s); c.height = Math.round(h*s);
+  c.getContext("2d").drawImage(src,0,0,c.width,c.height);
+  return c;
+}
+
+/* ---------- 平滑工具：逐級縮小再放大（近似高斯模糊），再用門檻把邊緣拉圓 ---------- */
+const mkC = (w,h)=>{const c=document.createElement("canvas");c.width=Math.max(1,w);c.height=Math.max(1,h);return c;};
+function blurBy(src, levels){
+  let c = src;
+  for(let i=0;i<levels;i++){ const n=mkC(c.width>>1,c.height>>1), x=n.getContext("2d");
+    x.imageSmoothingQuality="high"; x.drawImage(c,0,0,n.width,n.height); c=n; }
+  for(let i=0;i<levels;i++){ const last=i===levels-1, n=last?mkC(src.width,src.height):mkC(c.width*2,c.height*2), x=n.getContext("2d");
+    x.imageSmoothingQuality="high"; x.drawImage(c,0,0,n.width,n.height); c=n; }
+  return c;
+}
+function ramp(c, lo, gain, white){
+  const x=c.getContext("2d"), d=x.getImageData(0,0,c.width,c.height);
+  for(let i=0;i<d.data.length;i+=4){
+    d.data[i+3]=Math.max(0,Math.min(255,(d.data[i+3]-lo)*gain));
+    if(white) d.data[i]=d.data[i+1]=d.data[i+2]=255;
+  }
+  x.putImageData(d,0,0);
+}
+
+/* ---------- 貼紙：白邊（圓滑）＋陰影 ---------- */
+function makeSticker(cut, border){
+  const m = 24, pad = border + m;
+  const W = cut.width + pad*2, H = cut.height + pad*2;
+  const mk = (w,h)=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;};
+
+  // 1. 白色剪影
+  const sil = mk(W,H), sx = sil.getContext("2d");
+  sx.drawImage(cut,pad,pad);
+  sx.globalCompositeOperation="source-in"; sx.fillStyle="#fff"; sx.fillRect(0,0,W,H);
+
+  // 2. 膨脹：多層圓周疊加，取樣點數隨半徑增加，避免出現扇形鋸齒
+  const dil = mk(W,H), dx = dil.getContext("2d");
+  if(border>0){
+    for(const r of [border, border*.66, border*.33]){
+      const n = Math.max(48, Math.ceil(Math.PI*2*r/1.2));
+      for(let i=0;i<n;i++){ const a=i/n*Math.PI*2; dx.drawImage(sil,Math.cos(a)*r,Math.sin(a)*r); }
+    }
+  }
+  dx.drawImage(sil,0,0);
+
+  // 3. 多級模糊 + 門檻化：輪廓變圓滑，邊緣有抗鋸齒
+  const big = blurBy(dil, border>=12 ? 3 : 2);
+  ramp(big, 100, 4, true);
+
+  // 4. 合成：陰影 + 白邊 + 主體
+  const out = mk(W,H), ox = out.getContext("2d");
+  ox.shadowColor="rgba(0,0,0,.4)"; ox.shadowBlur=12; ox.shadowOffsetY=4;
+  ox.drawImage(big,0,0);
+  ox.shadowColor="transparent";
+  ox.drawImage(cut,pad,pad);
+
+  // 5. 縮到輸出尺寸
+  const s = Math.min(1, OUT_SIDE/Math.max(W,H));
+  if(s===1) return out;
+  const fin = mk(Math.round(W*s),Math.round(H*s));
+  const fx = fin.getContext("2d"); fx.imageSmoothingQuality="high"; fx.drawImage(out,0,0,fin.width,fin.height);
+  return fin;
+}
+
+/* ---------- 取景框：與畫面上的框同一區域 ---------- */
+const FRAME = 0.7;   // 取景框邊長 = 影像短邊的 70%
+function sizeFrame(){
+  const v=$("video"), sz=Math.round(FRAME*Math.min(v.clientWidth,v.clientHeight));
+  if(sz) $("frame").style.width=$("frame").style.height=sz+"px";
+}
+new ResizeObserver(sizeFrame).observe($("video"));
+$("video").addEventListener("loadedmetadata",sizeFrame);
+function frameCrop(src,w,h){
+  const side=Math.round(FRAME*Math.min(w,h)), sx=(w-side)/2, sy=(h-side)/2, sz=Math.min(side,MAX_SIDE);
+  const c=mkC(sz,sz); c.getContext("2d").drawImage(src,sx,sy,side,side,0,0,sz,sz); return c;
+}
+
+/* ---------- 自動分割：以取景框中央為選取點 ---------- */
+let photo, curMask=null, mW=0, mH=0, cutCanvas=null;
+const spin = (on,t) => { $("spin").style.display = on ? "flex":"none"; if(t) $("spinTxt").textContent=t; };
+const R = $("result");
+
+async function autoSegment(){
+  const inputs = await processor(RawImage.fromCanvas(photo));
+  const embeds = await model.get_image_embeddings(inputs);
+  const rs = inputs.reshaped_input_sizes[0];
+  const out = await model({ ...embeds,
+    input_points: new Tensor("float32", [.5*rs[1], .5*rs[0]], [1,1,1,2]),
+    input_labels: new Tensor("int64", [1n], [1,1,1]) });
+  const masks = await processor.post_process_masks(out.pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes);
+  const sc = out.iou_scores.data; let best=0;
+  for(let i=1;i<3;i++) if(sc[i]>sc[best]) best=i;
+  const d = masks[0].dims; mH=d[2]; mW=d[3];
+  curMask = masks[0].data.subarray(best*mH*mW,(best+1)*mH*mW);
+}
+
+/* ---------- 遮罩 → 透明主體（已裁切） ---------- */
+function buildCut(){
+  const W=photo.width,H=photo.height;
+  const m=mkC(mW,mH), mx=m.getContext("2d"), md=mx.createImageData(mW,mH);
+  for(let i=0;i<curMask.length;i++) md.data[i*4+3]=curMask[i]?255:0;
+  mx.putImageData(md,0,0);
+  const sm=blurBy(m,1); ramp(sm,90,3,false);
+  const full=mkC(W,H), fx=full.getContext("2d");
+  fx.drawImage(photo,0,0); fx.globalCompositeOperation="destination-in";
+  fx.imageSmoothingQuality="high"; fx.drawImage(sm,0,0,W,H);
+  const id=fx.getImageData(0,0,W,H); let x0=1e9,y0=1e9,x1=-1,y1=-1;
+  for(let i=0;i<W*H;i++) if(id.data[i*4+3]>40){const x=i%W,y=(i/W)|0; if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
+  if(x1<0) return null;
+  const c=mkC(x1-x0+1,y1-y0+1); c.getContext("2d").drawImage(full,x0,y0,c.width,c.height,0,0,c.width,c.height);
+  const k=Math.min(1,440/Math.max(c.width,c.height));
+  if(k===1) return c;
+  const o=mkC(Math.round(c.width*k),Math.round(c.height*k)), ox=o.getContext("2d");
+  ox.imageSmoothingQuality="high"; ox.drawImage(c,0,0,o.width,o.height); return o;
+}
+
+function render(){
+  const b = +$("border").value; $("bv").textContent = b;
+  const s = makeSticker(cutCanvas, b);
+  R.width=s.width; R.height=s.height; R.getContext("2d").drawImage(s,0,0);
+}
+
+/* ---------- 拍攝 → 直接產生貼紙 ---------- */
+let busy=false;
+async function run(p){
+  if(!model){ setStatus("模型還在載入，請稍候"); return; }
+  if(busy) return; busy=true;
+  photo=p; spin(true,"剪下主體中…");
+  try{
+    const t0=performance.now();
+    await autoSegment();
+    cutCanvas=buildCut();
+    if(!cutCanvas){ setStatus("沒有偵測到主體，請把物體放進框內中央再拍一次"); spin(false); busy=false; return; }
+    stopCam(); render();
+    $("cam").classList.add("hide"); R.classList.remove("hide"); $("stage").classList.add("checker");
+    $("camBar").classList.add("hide"); $("resBar").classList.remove("hide"); $("sliderRow").style.display="flex";
+    setStatus(`完成，用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒`);
+  }catch(e){ console.error(e); setStatus("處理失敗："+e.message); }
+  spin(false); busy=false;
+}
+
+$("shoot").onclick = () => { const v=$("video"); if(v.videoWidth) run(frameCrop(v,v.videoWidth,v.videoHeight)); };
+$("file").onchange = async e => {
+  const f=e.target.files[0]; if(!f) return;
+  const bmp = await createImageBitmap(f,{imageOrientation:"from-image"});
+  run(frameCrop(bmp,bmp.width,bmp.height)); e.target.value="";
+};
+$("border").oninput = () => cutCanvas && render();
+$("retake").onclick = () => {
+  R.classList.add("hide"); $("cam").classList.remove("hide"); $("stage").classList.remove("checker");
+  $("resBar").classList.add("hide"); $("camBar").classList.remove("hide"); $("sliderRow").style.display="none";
+  startCam(); setStatus("把主體放進框內，按下快門");
+};
+$("save").onclick = () => R.toBlob(b => {
+  const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="sticker.png"; a.click();
+}, "image/png");
+
+/* ---------- 賦予生命：面板 → 上傳 Firebase ---------- */
+const fbApp = initializeApp(FIREBASE_CONFIG);
+const db = getFirestore(fbApp);
+const OPTS = {
+  traits:["害羞","話多","傲嬌","熱血","溫柔","搞怪","愛睏"],
+  hobbies:["吃美食","睡覺","唱歌","運動","打電動","看星星","交朋友"] };
+for(const k in OPTS) OPTS[k].forEach(t=>{
+  const b=document.createElement("button"); b.type="button"; b.className="chip"; b.textContent=t;
+  b.setAttribute("aria-pressed","false");
+  b.onclick=()=>{ b.classList.toggle("on"); b.setAttribute("aria-pressed",b.classList.contains("on")); };
+  $(k).appendChild(b);
+});
+const picked = id => [...$(id).querySelectorAll(".on")].map(b=>b.textContent);
+const view = n => ["v1","v2","v3"].forEach(v=>$(v).classList.toggle("hide",v!=="v"+n));
+
+$("alive").onclick = () => { $("pv1").src=R.toDataURL(); view(1); $("panel").style.display="block"; };
+$("no").onclick = () => $("panel").style.display="none";
+$("yes").onclick = () => view(2);
+$("back").onclick = () => view(1);
+$("again").onclick = () => {
+  $("panel").style.display="none"; $("nm").value=$("extra").value="";
+  document.querySelectorAll(".chip.on").forEach(b=>b.click()); $("retake").click();
+};
+function stickerDataUrl(){
+  let s = 1, url;
+  do{
+    const c = mkC(Math.round(R.width*s), Math.round(R.height*s));
+    c.getContext("2d").drawImage(R,0,0,c.width,c.height);
+    url = c.toDataURL("image/webp",0.85);   // 不支援 webp 的瀏覽器會自動退回 png
+    s *= 0.8;
+  }while(url.length > 700000 && s > 0.2);
+  return url;
+}
+$("send").onclick = async () => {
+  const btn=$("send"); btn.disabled=true; btn.textContent="送出中…";
+  try{
+    const imageUrl = stickerDataUrl();
+    const wait = (p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error("寫入逾時，請檢查 Firestore 是否已建立、規則是否允許寫入")),ms))]);
+    await wait(addDoc(collection(db,"characters"),{
+      name: $("nm").value.trim().slice(0,12) || "無名",
+      traits: picked("traits"), hobbies: picked("hobbies"),
+      extra: $("extra").value.trim().slice(0,40),
+      imageUrl, intro:null, status:"pending", createdAt:serverTimestamp() }),15000);
+    view(3);
+  }catch(e){ console.error(e); alert("送出失敗："+e.message); }
+  btn.disabled=false; btn.textContent="送出，讓牠誕生";
+};
+
+startCam(); loadModel().catch(e => setStatus("模型載入失敗："+e.message));
+</script>
+</body>
+</html>

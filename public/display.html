@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>貼紙世界 · 展示</title>
+<style>
+:root{--bg:#14202b;--ink:#f3f0e8;--sub:#8fa3b3;--acc:#ffd23f}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden}
+body{background:radial-gradient(ellipse at 50% 100%,#1d3142,var(--bg) 70%);color:var(--ink);
+  font:16px/1.5 "Noto Sans TC",system-ui,sans-serif}
+#empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--sub);font-size:20px}
+.char{position:absolute;left:0;top:0;width:var(--s);height:var(--s);transition:transform 6s ease-in-out;will-change:transform}
+.char img{width:100%;height:100%;object-fit:contain;display:block;transition:transform .4s}
+.char .nm{position:absolute;left:50%;bottom:-26px;transform:translateX(-50%);font-size:14px;font-weight:700;
+  color:var(--ink);white-space:nowrap;text-shadow:0 1px 4px #000}
+.bubble{position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);width:max-content;max-width:260px;
+  background:var(--ink);color:#1a1a1a;padding:10px 14px;border-radius:18px;font-size:15px;font-weight:500;display:none}
+.bubble::after{content:"";position:absolute;left:50%;top:100%;margin-left:-8px;border:8px solid transparent;border-top-color:var(--ink)}
+@media (prefers-reduced-motion:reduce){.char{transition-duration:.01s}}
+</style>
+</head>
+<body>
+<div id="empty">等待第一個生命誕生…</div>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getFirestore, collection, query, orderBy, limit, onSnapshot } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+const app = initializeApp({
+  apiKey:"AIzaSyCSYLJJYHMjqrl6KKC8lZE1rlnbcoZ5OPs", authDomain:"drawing-eeecb.firebaseapp.com",
+  projectId:"drawing-eeecb", storageBucket:"drawing-eeecb.firebasestorage.app",
+  messagingSenderId:"835181156249", appId:"1:835181156249:web:7d554f5f54d91742c5a508" });
+const db = getFirestore(app);
+
+const S = Math.round(Math.min(170, innerWidth*.2));
+document.documentElement.style.setProperty("--s", S+"px");
+const rnd = (a,b)=>a+Math.random()*(b-a);
+const randPos = () => ({ x:rnd(10, innerWidth-S-10), y:rnd(innerHeight*.3, innerHeight-S-50) });
+
+/* ---------- 自我介紹：先用句型組合。之後要接 AI，只需改這個函式 ---------- */
+const AI_URL = "https://sticker.leepeng20000414.workers.dev/";
+function makeIntro(c){
+  const pick = a => a[Math.floor(Math.random()*a.length)];
+  const t = c.traits?.length ? pick(c.traits) : "", h = c.hobbies?.length ? pick(c.hobbies) : "";
+  return `嗨，我是${c.name}！` + (t ? `大家都說我很${t}。` : "") + (h ? `我最喜歡${h}。` : "") + (c.extra ? c.extra+"。" : "") + "請多指教！";
+}
+
+async function getIntro(c){
+  try{
+    const r = await Promise.race([
+      fetch(AI_URL,{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({name:c.name,traits:c.traits,hobbies:c.hobbies,extra:c.extra})}),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error("逾時")),8000)) ]);
+    const j = await r.json();
+    if(j.intro) return j.intro;
+  }catch(e){ console.warn("AI 失敗，改用句型", e); }
+  return makeIntro(c);
+}
+
+/* ---------- 打字機 ---------- */
+function typeText(box, text){
+  box.style.display="block"; box.textContent="";
+  let i=0; const t=setInterval(()=>{ box.textContent=text.slice(0,++i); if(i>=text.length) clearInterval(t); },80);
+  setTimeout(()=>box.style.display="none", text.length*80 + 5000);
+}
+
+/* ---------- 角色 ---------- */
+const els = new Map();
+function moveTo(el, p){
+  const img = el.querySelector("img"), last = +el.dataset.x || 0;
+  img.style.transform = p.x < last ? "scaleX(-1)" : "";
+  el.dataset.x = p.x;
+  el.style.transform = `translate(${p.x}px,${p.y}px)`;
+  img.animate([{transform:img.style.transform+" translateY(0)"},{transform:img.style.transform+" translateY(-14px)"},{transform:img.style.transform+" translateY(0)"}],
+    {duration:500, iterations:12});
+}
+async function addChar(id, c, entrance){
+  if(els.has(id)) return;
+  document.getElementById("empty")?.remove();
+  const el = document.createElement("div"); el.className="char";
+  el.innerHTML = `<img alt=""><div class="nm"></div><div class="bubble"></div>`;
+  el.querySelector("img").src = c.imageUrl;
+  el.querySelector(".nm").textContent = c.name;
+  document.body.appendChild(el); els.set(id, el);
+  const target = randPos();
+  if(entrance){
+    el.style.transition="none"; el.style.transform=`translate(${-S-40}px,${target.y}px)`; el.dataset.x=-S-40;
+    el.offsetWidth; el.style.transition="";
+    moveTo(el, target);
+    const intro = await getIntro(c);
+    setTimeout(()=>typeText(el.querySelector(".bubble"), intro), 6200);
+  }else{
+    el.style.transition="none"; el.style.transform=`translate(${target.x}px,${target.y}px)`; el.dataset.x=target.x;
+    el.offsetWidth; el.style.transition="";
+  }
+  (function wander(){ setTimeout(()=>{ moveTo(el, randPos()); wander(); }, rnd(8000,14000)); })();
+}
+
+/* ---------- 即時監聽 ---------- */
+let first = true;
+onSnapshot(query(collection(db,"characters"), orderBy("createdAt","desc"), limit(30)), snap => {
+  snap.docChanges().forEach(ch => { if(ch.type==="added") addChar(ch.doc.id, ch.doc.data(), !first); });
+  first = false;
+}, e => { document.getElementById("empty").textContent = "讀取失敗：" + e.message; });
+</script>
+</body>
+</html>
