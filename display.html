@@ -11,8 +11,8 @@ html,body{height:100%;margin:0;overflow:hidden}
 body{background:radial-gradient(ellipse at 50% 100%,#1d3142,var(--bg) 70%);color:var(--ink);
   font:16px/1.5 "Noto Sans TC",system-ui,sans-serif}
 #empty{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:var(--sub);font-size:20px}
-.char{position:absolute;left:0;top:0;width:var(--s);height:var(--s);transition:transform 6s ease-in-out;will-change:transform}
-.char img{width:100%;height:100%;object-fit:contain;display:block;transition:transform .4s;
+.char{position:absolute;left:0;top:0;width:var(--s);height:var(--s);will-change:transform}
+.char img{width:100%;height:100%;object-fit:contain;display:block;
   animation:bob 2.6s ease-in-out infinite;animation-delay:var(--d,0s)}
 @keyframes bob{50%{translate:0 -7px}}
 .char .nm{position:absolute;left:50%;bottom:-26px;transform:translateX(-50%);font-size:14px;font-weight:700;
@@ -20,7 +20,7 @@ body{background:radial-gradient(ellipse at 50% 100%,#1d3142,var(--bg) 70%);color
 .bubble{position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);width:max-content;max-width:260px;
   background:var(--ink);color:#1a1a1a;padding:10px 14px;border-radius:18px;font-size:15px;font-weight:500;display:none}
 .bubble::after{content:"";position:absolute;left:50%;top:100%;margin-left:-8px;border:8px solid transparent;border-top-color:var(--ink)}
-@media (prefers-reduced-motion:reduce){.char{transition-duration:.01s}.char img{animation:none}}
+@media (prefers-reduced-motion:reduce){.char img{animation:none}}
 </style>
 </head>
 <body>
@@ -35,20 +35,22 @@ const app = initializeApp({
   messagingSenderId:"835181156249", appId:"1:835181156249:web:7d554f5f54d91742c5a508" });
 const db = getFirestore(app);
 
-const S = Math.round(Math.min(170, innerWidth*.2));
+const S = Math.round(Math.min(170, innerWidth*.2));       // 角色尺寸
 document.documentElement.style.setProperty("--s", S+"px");
+const GAP = S*.8;                                          // 兩隻角色中心點的最小距離（越大越不會重疊）
+const DEPTH = 1.4;                                         // 垂直距離的加權：>1 代表上下可以靠得比較近（像前後站）
 const rnd = (a,b)=>a+Math.random()*(b-a);
 const M = Math.min(50, Math.max(10,(innerWidth-S)/2-1));
-const randPos = () => ({ x:rnd(M, innerWidth-S-M), y:rnd(innerHeight*.3, innerHeight-S-50) });
+const bounds = () => ({ x0:M, x1:innerWidth-S-M, y0:innerHeight*.3, y1:innerHeight-S-50 });
+const dist = (a,b) => Math.hypot(a.x-b.x, (a.y-b.y)*DEPTH);
 
-/* ---------- 自我介紹：先用句型組合。之後要接 AI，只需改這個函式 ---------- */
+/* ---------- 自我介紹 ---------- */
 const AI_URL = "https://sticker.leepeng20000414.workers.dev/";
 function makeIntro(c){
   const pick = a => a[Math.floor(Math.random()*a.length)];
   const t = c.traits?.length ? pick(c.traits) : "", h = c.hobbies?.length ? pick(c.hobbies) : "";
   return `嗨，我是${c.name}！` + (t ? `大家都說我很${t}。` : "") + (h ? `我最喜歡${h}。` : "") + (c.extra ? c.extra+"。" : "") + "請多指教！";
 }
-
 async function getIntro(c){
   try{
     const r = await Promise.race([
@@ -61,12 +63,14 @@ async function getIntro(c){
   return makeIntro(c);
 }
 
-/* ---------- 打字機 ---------- */
-function typeText(box, text, speed=80, hold=5000){
-  clearInterval(box._t); clearTimeout(box._h);
+/* ---------- 打字機：pause=true 時角色會停下來說話（自我介紹用），隨口聊天則邊走邊說 ---------- */
+function typeText(c, text, speed=80, hold=5000, pause=false){
+  const box = c.bubble; clearInterval(box._t); clearTimeout(box._h);
+  c.talking = true; if(pause) c.speaking = true;
   box.style.display="block"; box.textContent="";
   let i=0; box._t=setInterval(()=>{ box.textContent=text.slice(0,++i); if(i>=text.length) clearInterval(box._t); },speed);
-  box._h=setTimeout(()=>box.style.display="none", text.length*speed + hold);
+  box._h=setTimeout(()=>{ box.style.display="none"; c.talking=false;
+    if(pause){ c.speaking=false; c.idleUntil=performance.now()+1500; } }, text.length*speed + hold);
 }
 
 /* ---------- 隨口說的小句子：用當初輸入的名字、個性、喜好、補充組成 ---------- */
@@ -75,56 +79,97 @@ function makeChatter(c){
   const P = [`我是${c.name}！`, `${c.name}在這裡～`];
   (c.traits||[]).forEach(t => P.push(`我覺得自己很${t}～`, `${t}就是我！`));
   (c.hobbies||[]).forEach(h => P.push(`好想${h}～`, `${h}最開心了！`));
-  if(c.extra){ P.push(c.extra, c.extra+"！", c.extra); }      // 自己寫的句子，多放幾份讓它更常出現
+  if(c.extra){ P.push(c.extra, c.extra+"！", c.extra); }   // 自己寫的句子，多放幾份讓它更常出現
   if(P.length < 4) P.push("有人要跟我玩嗎？", "今天天氣真好～");
   return P;
 }
-function chatterLoop(el, c){
-  const pool = makeChatter(c), box = el.querySelector(".bubble"); let last = "";
-  (function next(first){
-    setTimeout(()=>{
-      if(box.style.display !== "block"){                       // 正在說話就跳過這次
-        let t, n=0; do{ t = pickOne(pool); }while(t===last && pool.length>1 && ++n<10);
-        last = t; typeText(box, t, 60, 3500);
-      }
-      next();
-    }, first ? rnd(1500,5000) : rnd(9000,20000));
-  })(true);
-}
+/* ---------- 輪流說話：同時說話的角色不超過一半，而且一個一個錯開開口 ---------- */
+const TALK_RATIO = .5, SPEAK_GAP = [2500,5000];            // 同時說話上限比例；兩次開口之間的最短間隔（毫秒）
+let nextSpeakAt = 0;
+const nearTalker = (c,list) => list.some(o=>o.talking && o!==c && Math.abs(o.x-c.x)<S*1.5 && Math.abs(o.y-c.y)<S*1.2);
+setInterval(()=>{
+  const now=performance.now(); if(now<nextSpeakAt) return;
+  const list=[...chars.values()];
+  if(list.filter(c=>c.talking).length >= Math.max(1, Math.floor(list.length*TALK_RATIO))) return;
+  const ready=list.filter(c=>!c.entering && !c.talking && now-c.born>4000).sort((a,b)=>a.lastSpoke-b.lastSpoke);   // 最久沒說話的優先
+  const c = ready.find(x=>!nearTalker(x,list)) || ready[0]; if(!c) return;                                        // 盡量不選離正在說話的人太近的
+  let t,n=0; do{ t=pickOne(c.pool); }while(t===c.lastLine && c.pool.length>1 && ++n<10);
+  c.lastLine=t; c.lastSpoke=now; typeText(c,t,60,3500);
+  nextSpeakAt = now + rnd(...SPEAK_GAP);
+}, 700);
 
-/* ---------- 角色 ---------- */
-const els = new Map();
-function moveTo(el, p){
-  const img = el.querySelector("img"), last = +el.dataset.x || 0;
-  img.style.transform = p.x < last ? "scaleX(-1)" : "";
-  el.dataset.x = p.x;
-  el.style.transform = `translate(${p.x}px,${p.y}px)`;
-  img.animate([{transform:img.style.transform+" translateY(0)"},{transform:img.style.transform+" translateY(-14px)"},{transform:img.style.transform+" translateY(0)"}],
-    {duration:500, iterations:12});
+/* ---------- 角色與碰撞 ---------- */
+const chars = new Map();
+// 挑目的地：抽 14 個候選點，選離其他角色（含他們的目的地）最遠的
+function pickTarget(me){
+  const b = bounds(); let best=null, bd=-1;
+  for(let i=0;i<14;i++){
+    const p = { x:rnd(b.x0,b.x1), y:rnd(b.y0,b.y1) }; let dd=1e9;
+    for(const o of chars.values()){ if(o===me) continue;
+      dd = Math.min(dd, dist(p,o), o.ty!=null ? dist(p,{x:o.tx,y:o.ty}) : 1e9); }
+    if(dd>bd){ bd=dd; best=p; }
+  }
+  return best;
 }
-async function addChar(id, c, entrance){
-  if(els.has(id)) return;
+let last = performance.now();
+function tick(now){
+  const dt = Math.min(.05,(now-last)/1000); last = now;
+  const b = bounds(), list = [...chars.values()];
+  for(const c of list){                                    // 1. 移動
+    if(c.speaking) continue;
+    if(c.ty!=null){
+      const dx=c.tx-c.x, dy=c.ty-c.y, d=Math.hypot(dx,dy);
+      if(d<3){ c.tx=c.ty=null; c.idleUntil=now+rnd(2000,6000);
+        if(c.entering){ c.entering=false; c.onArrive?.(); } }
+      else{ const v=Math.min(c.speed*dt,d); c.x+=dx/d*v; c.y+=dy/d*v; c.phase+=dt*10; if(Math.abs(dx)>2) c.dir = dx<0 ? -1 : 1; }
+    }else if(now>c.idleUntil){ const t=pickTarget(c); c.tx=t.x; c.ty=t.y; }
+  }
+  for(let i=0;i<list.length;i++) for(let j=i+1;j<list.length;j++){   // 2. 碰撞：太近就互相推開
+    const a=list[i], o=list[j]; if(a.entering||o.entering) continue;
+    let dx=o.x-a.x, dy=(o.y-a.y)*DEPTH, d=Math.hypot(dx,dy);
+    if(d>=GAP) continue;
+    if(d<.01){ dx=rnd(-1,1); dy=rnd(-1,1); d=Math.hypot(dx,dy)||1; }
+    const push=(GAP-d)/2*.35, ux=dx/d*push, uy=dy/d*push/DEPTH;
+    a.x-=ux; a.y-=uy; o.x+=ux; o.y+=uy;
+  }
+  for(const c of list){                                    // 3. 限制在場內並更新畫面
+    if(!c.entering){ c.x=Math.min(b.x1,Math.max(b.x0,c.x)); c.y=Math.min(b.y1,Math.max(b.y0,c.y)); }
+    const hop = c.ty!=null ? -Math.abs(Math.sin(c.phase))*10 : 0;
+    c.el.style.transform = `translate(${c.x}px,${c.y}px)`;
+    c.img.style.transform = `translateY(${hop}px) scaleX(${c.dir})`;
+    c.el.style.zIndex = c.talking ? 10000 : Math.round(c.y);          // 越靠下越在前面；說話的最上層
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+function addChar(id, d, entrance){
+  if(chars.has(id)) return;
   document.getElementById("empty")?.remove();
   const el = document.createElement("div"); el.className="char";
   el.innerHTML = `<img alt=""><div class="nm"></div><div class="bubble"></div>`;
-  el.querySelector("img").src = c.imageUrl; el.style.setProperty("--d", (-Math.random()*2.6).toFixed(2)+"s");
-  el.querySelector(".nm").textContent = c.name;
-  document.body.appendChild(el); els.set(id, el);
-  const target = randPos();
+  const img = el.querySelector("img"); img.src = d.imageUrl; el.style.setProperty("--d", (-Math.random()*2.6).toFixed(2)+"s");
+  el.querySelector(".nm").textContent = d.name;
+  document.body.appendChild(el);
+  const c = { el, img, bubble:el.querySelector(".bubble"), x:0, y:0, tx:null, ty:null, dir:1, phase:0,
+              speed:rnd(55,85), idleUntil:performance.now()+rnd(200,2500), entering:false, speaking:false, talking:false,
+              pool:makeChatter(d), lastLine:"", lastSpoke:Math.random()*1000, born:performance.now(), intro:null };
+  const t = pickTarget(c);
   if(entrance){
-    el.style.transition="none"; el.style.transform=`translate(${-S-40}px,${target.y}px)`; el.dataset.x=-S-40;
-    el.offsetWidth; el.style.transition="";
-    moveTo(el, target);
-    const intro = await getIntro(c);
-    setTimeout(()=>typeText(el.querySelector(".bubble"), intro), 6200);
-    setTimeout(()=>chatterLoop(el,c), 14000);
-    setTimeout(()=>(function wander(){ setTimeout(()=>{ moveTo(el, randPos()); wander(); }, rnd(6000,11000)); })(), 7000);
+    c.x=-S-40; c.y=t.y; c.tx=t.x; c.ty=t.y; c.speed=Math.max(120,(t.x+S+40)/6); c.entering=true;   // 最多約 6 秒走到定點
+    const introP = getIntro(d).then(s=>(c.intro=s)); let said=false;              // 走路的同時先去要自我介紹
+    const say = async () => { if(said) return; said=true; typeText(c, await introP, 80, 5000, true); };
+    c.onArrive = say; setTimeout(say, 9000);                 // 保險：分頁在背景、畫面不更新時也會開口
   }else{
-    el.style.transition="none"; el.style.transform=`translate(${target.x}px,${target.y}px)`; el.dataset.x=target.x;
-    el.offsetWidth; el.style.transition="";
-    chatterLoop(el,c);
-    setTimeout(()=>(function wander(){ moveTo(el, randPos()); setTimeout(wander, rnd(6000,11000)); })(), rnd(200,2500));   // 剛進來就很快動起來
+    c.x=t.x; c.y=t.y;
   }
+  el.style.cursor="pointer";                                 // 點角色 → 再說一次自我介紹
+  el.addEventListener("click", async ()=>{
+    if(c.entering) return;
+    if(!c.intro){ c.talking=true; c.bubble.style.display="block"; c.bubble.textContent="…"; c.intro=await getIntro(d); }
+    typeText(c, c.intro, 80, 5000, true);
+  });
+  chars.set(id, c);
 }
 
 /* ---------- 即時監聽 ---------- */
@@ -132,7 +177,7 @@ let first = true;
 onSnapshot(query(collection(db,"characters"), orderBy("createdAt","desc"), limit(30)), snap => {
   snap.docChanges().forEach(ch => { if(ch.type==="added") addChar(ch.doc.id, ch.doc.data(), !first); });
   first = false;
-}, e => { document.getElementById("empty").textContent = "讀取失敗：" + e.message; });
+}, e => { const m=document.getElementById("empty"); if(m) m.textContent = "讀取失敗：" + e.message; });
 </script>
 </body>
 </html>
