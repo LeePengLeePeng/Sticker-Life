@@ -181,22 +181,42 @@ function loadMP(){
     mpSeg = await Seg.createFromOptions(vision,{ baseOptions:{ modelAssetPath:MP_MODEL }, outputConfidenceMasks:true, outputCategoryMask:false });
   })().finally(()=>{ mpLoading=null; });
 }
+let maskSoft=false;   // true＝curMask 是 0~255 的柔邊遮罩（輕量模式）；false＝0/1 二值遮罩（SAM）
 async function mpSegment(){
   let stage="載入模型";
   try{
     await loadMP();
     stage="segment";
-    let res=null;
-    const ret = mpSeg.segment(photo,{keypoint:{x:.5,y:.5}}, r=>{ res=r; });
-    res = res ?? ret;
-    if(!res) throw new Error("沒有回傳結果");
-    stage="讀取遮罩";
-    const arr = res.confidenceMasks ?? res;
-    const m = Array.isArray(arr) ? arr[0] : arr;
-    const f = m.getAsFloat32Array(); mW=m.width; mH=m.height;
-    const u = new Uint8Array(f.length); for(let i=0;i<f.length;i++) u[i]=f[i]>.5?1:0;
-    curMask = u;
-    try{ (Array.isArray(arr)?arr:[m]).forEach(x=>x.close?.()); res.close?.(); }catch{}
+    // 中心點 + 上下左右 4 個輔助點：中心點只點到物體一小塊時，用輔助點補齊
+    const D=.16, pts=[[.5,.5],[.5-D,.5],[.5+D,.5],[.5,.5-D],[.5,.5+D]];
+    const maps=[];
+    for(let k=0;k<pts.length;k++){
+      let res=null;
+      try{
+        const ret = mpSeg.segment(photo,{keypoint:{x:pts[k][0],y:pts[k][1]}}, r=>{ res=r; });
+        res = res ?? ret;
+        if(!res) throw new Error("沒有回傳結果");
+        const arr = res.confidenceMasks ?? res;
+        const m = Array.isArray(arr) ? arr[0] : arr;
+        maps.push({ f:m.getAsFloat32Array().slice(), w:m.width, h:m.height });   // slice：先複製，再關閉原遮罩
+        try{ (Array.isArray(arr)?arr:[m]).forEach(x=>x.close?.()); res.close?.(); }catch{}
+      }catch(e){ if(k===0) throw e; }   // 輔助點失敗就略過，中心點失敗才算失敗
+    }
+    stage="合併遮罩";
+    const base=maps[0], n=base.f.length; mW=base.w; mH=base.h;
+    const acc=Float32Array.from(base.f);
+    let baseArea=0; for(let i=0;i<n;i++) if(base.f[i]>.5) baseArea++;
+    for(let k=1;k<maps.length;k++){
+      const e=maps[k]; if(e.f.length!==n) continue;
+      let inter=0, uni=0, area=0;
+      for(let i=0;i<n;i++){ const A=base.f[i]>.5, B=e.f[i]>.5; if(A&&B)inter++; if(A||B)uni++; if(B)area++; }
+      // 只合併「和中心點選到同一個物體」的結果；範圍暴增（可能漏到背景）就捨棄
+      if(uni && inter/uni>=.6 && area<=baseArea*1.5)
+        for(let i=0;i<n;i++) if(e.f[i]>acc[i]) acc[i]=e.f[i];
+    }
+    const u=new Uint8Array(n);
+    for(let i=0;i<n;i++) u[i]=Math.max(0,Math.min(255,Math.round(acc[i]*255)));   // 保留柔邊，不再一刀切
+    curMask=u; maskSoft=true;
   }catch(e){ throw new Error(`[${stage}] ${e.message||e}`); }
 }
 
@@ -430,6 +450,7 @@ async function autoSegment(){
   const sc = out.iou_scores.data; let best=0;
   for(let i=1;i<3;i++) if(sc[i]>sc[best]) best=i;
   const d = masks[0].dims; mH=d[2]; mW=d[3];
+  maskSoft=false;
   curMask = masks[0].data.slice(best*mH*mW,(best+1)*mH*mW);   // 複製一份，才能安全釋放原 tensor
   for(const t of [inputs.pixel_values, embeds.image_embeddings, embeds.image_positional_embeddings, out.pred_masks, out.iou_scores, masks[0]])
     try{ t?.dispose?.(); }catch{}
@@ -439,9 +460,9 @@ async function autoSegment(){
 function buildCut(){
   const W=photo.width,H=photo.height;
   const m=mkC(mW,mH), mx=m.getContext("2d"), md=mx.createImageData(mW,mH);
-  for(let i=0;i<curMask.length;i++) md.data[i*4+3]=curMask[i]?255:0;
+  for(let i=0;i<curMask.length;i++) md.data[i*4+3]=maskSoft?curMask[i]:(curMask[i]?255:0);
   mx.putImageData(md,0,0);
-  const sm=blurBy(m,1); ramp(sm,90,3,false);
+  const sm=blurBy(m,1); ramp(sm,maskSoft?70:90,3,false);
   const full=mkC(W,H), fx=full.getContext("2d");
   fx.drawImage(photo,0,0); fx.globalCompositeOperation="destination-in";
   fx.imageSmoothingQuality="high"; fx.drawImage(sm,0,0,W,H);
