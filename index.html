@@ -3,24 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>貼紙製造機 · 影像測試</title>
+<title>今天的我是誰</title>
 <style>
-:root{--bg:#14202b;--ink:#f3f0e8;--sub:#8fa3b3;--acc:#ffd23f;--line:#2a3b4a}
+/* 色票與 display.html 對齊：酒紅黑底、暖米白字、暖粉棕副字、暖黃強調（聚光燈） */
+:root{--bg:#1a0b10;--stage:#0f0508;--ink:#f3f0e8;--sub:#c9a99a;--acc:#ffd23f;--line:#4a2430;--curtain:#4a1220;--curtain2:#3b0e1a}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
-body{background:var(--bg);color:var(--ink);font:16px/1.5 "Noto Sans TC",system-ui,sans-serif;
+body{background:radial-gradient(ellipse at 50% -5%,rgba(255,150,110,.22),transparent 60%),var(--bg);
+  color:var(--ink);font:16px/1.5 "Noto Sans TC",system-ui,sans-serif;
   padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);display:flex;flex-direction:column}
 header{padding:14px 18px 6px;position:relative}
 #mode{position:absolute;right:14px;top:14px;padding:6px 12px;font-size:13px}
 h1{font-size:20px;margin:0;font-weight:800;letter-spacing:.02em}
 #status{color:var(--sub);font-size:13px;min-height:20px;margin-top:2px}
 main{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 18px 18px;gap:12px}
-.stage{flex:1;min-height:0;border-radius:20px;overflow:hidden;position:relative;background:#0b141c;
+.stage{flex:1;min-height:0;border-radius:20px;overflow:hidden;position:relative;background:var(--stage);
+  box-shadow:0 0 0 2px var(--line),0 10px 30px rgba(0,0,0,.45);
   display:flex;align-items:center;justify-content:center}
 .stage video,.stage img,.stage canvas{max-width:100%;max-height:100%;display:block}
 #cam{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+/* 取景框＝聚光燈：框內亮、框外壓暗，邊緣有暖黃微光 */
 #frame{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:60%;aspect-ratio:1;
-  box-shadow:0 0 0 999px rgba(11,20,28,.45);border-radius:22px;pointer-events:none}
+  box-shadow:0 0 36px 4px rgba(255,210,63,.25),0 0 0 999px rgba(18,7,10,.5);border-radius:22px;pointer-events:none}
 .corner{position:absolute;width:44px;height:44px;border:5px solid var(--acc)}
 .tl{left:0;top:0;border-right:0;border-bottom:0;border-top-left-radius:22px}
 .tr{right:0;top:0;border-left:0;border-bottom:0;border-top-right-radius:22px}
@@ -28,10 +32,12 @@ main{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 18px 18p
 .br{right:0;bottom:0;border-left:0;border-top:0;border-bottom-right-radius:22px}
 .dot{position:absolute;left:50%;top:50%;width:10px;height:10px;margin:-5px;border-radius:50%;
   background:rgba(255,210,63,.85);box-shadow:0 0 0 3px rgba(0,0,0,.3)}
-.checker{background:conic-gradient(#1c2b38 25%,#233443 0 50%,#1c2b38 0 75%,#233443 0) 0 0/24px 24px}
-#result{filter:none}
+/* 結果頁背景：舞台地板的暖色棋盤 */
+.checker{background:conic-gradient(#2a1119 25%,#351a22 0 50%,#2a1119 0 75%,#351a22 0) 0 0/24px 24px}
+#result{filter:none;animation:bob 2.6s ease-in-out infinite}   /* 和 display 一樣的上下浮動，預告牠上台的樣子 */
+@keyframes bob{50%{translate:0 -7px}}
 #editCanvas{position:absolute;max-width:100%;max-height:100%;display:none;touch-action:none;cursor:crosshair;z-index:4}
-#editHint{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:5;display:none;background:rgba(11,20,28,.82);padding:7px 12px;border-radius:999px;color:var(--ink);font-size:13px;white-space:nowrap}
+#editHint{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:5;display:none;background:rgba(18,7,10,.85);padding:7px 12px;border-radius:999px;color:var(--ink);font-size:13px;white-space:nowrap}
 .bar{display:flex;gap:10px;align-items:center}
 button,label.btn{font:inherit;font-weight:700;border:0;border-radius:999px;padding:13px 20px;cursor:pointer;
   background:var(--line);color:var(--ink);text-align:center}
@@ -39,31 +45,35 @@ button.main{background:var(--acc);color:#1a1a1a;flex:1}
 button:disabled{opacity:.4}
 button:focus-visible,label.btn:focus-within{outline:3px solid var(--acc);outline-offset:2px}
 .shutter{width:72px;height:72px;padding:0;border-radius:50%;background:var(--ink);
-  border:5px solid var(--bg);box-shadow:0 0 0 3px var(--ink);margin:0 auto}
+  border:5px solid var(--bg);box-shadow:0 0 0 3px var(--ink),0 0 22px rgba(255,210,63,.3);margin:0 auto}
 .row{display:none;align-items:center;gap:12px;font-size:14px;color:var(--sub)}
 .row input{flex:1;accent-color:var(--acc)}
 .hide{display:none!important}
 #bar{position:absolute;left:0;bottom:0;height:4px;background:var(--acc);width:0;transition:width .2s}
 .spin{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
-  background:rgba(11,20,28,.72);font-weight:700}
-#panel{position:fixed;inset:0;z-index:10;display:none;overflow:auto;background:rgba(11,20,28,.95);
+  background:rgba(18,7,10,.75);font-weight:700}
+/* 賦予生命面板＝布幔：上台前的最後一步 */
+#panel{position:fixed;inset:0;z-index:10;display:none;overflow:auto;
+  background:linear-gradient(180deg,rgba(18,7,10,.6),rgba(18,7,10,.2) 40%,rgba(18,7,10,.7)),
+    repeating-linear-gradient(90deg,var(--curtain) 0 44px,var(--curtain2) 44px 88px);
   padding:calc(env(safe-area-inset-top) + 24px) 20px calc(env(safe-area-inset-bottom) + 24px)}
 #panel .box{max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
 #panel h2{font-size:22px;margin:0}
 #panel p{margin:0;color:var(--sub)}
-#panel .pv{width:140px;height:140px;object-fit:contain;margin:0 auto}
+#panel .pv{width:140px;height:140px;object-fit:contain;margin:0 auto;animation:bob 2.6s ease-in-out infinite}
 .fld{display:flex;flex-direction:column;gap:8px;font-weight:700;font-size:14px}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
-.chip{border:2px solid var(--line);background:none;padding:7px 14px;font-weight:600}
+.chip{border:2px solid var(--sub);background:rgba(18,7,10,.35);padding:7px 14px;font-weight:600}
 .chip.on{background:var(--acc);border-color:var(--acc);color:#1a1a1a}
-#panel input[type=text]{font:inherit;color:var(--ink);background:#0b141c;border:2px solid var(--line);
+#panel input[type=text]{font:inherit;color:var(--ink);background:var(--stage);border:2px solid var(--line);
   border-radius:14px;padding:11px 14px;width:100%}
 #panel input[type=text]:focus{outline:3px solid var(--acc);outline-offset:1px}
+@media (prefers-reduced-motion:reduce){#result,#panel .pv{animation:none}}
 </style>
 </head>
 <body>
 <header>
-  <h1>貼紙製造機</h1><button id="mode" type="button" title="切換去背模式"></button>
+  <h1>今天的我是誰</h1><button id="mode" type="button" title="切換去背模式"></button>
   <div id="status">準備中…</div>
 </header>
 <main>
