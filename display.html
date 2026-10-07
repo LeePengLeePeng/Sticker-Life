@@ -2,12 +2,12 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>打聲招呼</title>
 <style>
 :root{--ink:#f3f0e8;--sub:#c9a99a}
 *{box-sizing:border-box}
-html,body{height:100%;margin:0;overflow:hidden;background:#12070a;font:16px/1.5 "Noto Sans TC",system-ui,sans-serif}
+html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none;touch-action:none;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;background:#12070a;font:16px/1.5 "Noto Sans TC",system-ui,sans-serif}
 #world{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;overflow:hidden}
 #world>img{position:absolute;left:0;top:0;width:1920px;height:1080px;pointer-events:none;user-select:none;filter:brightness(1.12)}   /* 背景整體提亮：1＝原樣，越大越亮 */
 #empty{position:fixed;inset:0;z-index:30000;display:flex;align-items:center;justify-content:center;color:var(--sub);font-size:20px;pointer-events:none}
@@ -25,6 +25,10 @@ html,body{height:100%;margin:0;overflow:hidden;background:#12070a;font:16px/1.5 
 #vig{z-index:20002;background:radial-gradient(ellipse at 50% 55%,transparent 55%,rgba(0,0,12,.28) 100%)}
 .lh{position:absolute;z-index:30000;width:40px;height:40px;margin:-20px;border-radius:50%;border:4px solid #fff;background:rgba(255,210,63,.55);cursor:grab;touch-action:none;display:none}
 #lj{position:fixed;left:8px;bottom:8px;z-index:30001;font:12px/1.5 monospace;background:rgba(0,0,0,.75);color:#fff;padding:8px 10px;border-radius:8px;display:none;white-space:pre-wrap;user-select:all}
+/* 關閉文字／圖片選取、長按選單、拖曳與點擊高亮（編輯光源用的數值面板 #lj 例外，可選取複製） */
+html,body,#world,#world *,#empty{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+#lj{-webkit-user-select:all;user-select:all}
+img,canvas{-webkit-user-drag:none;-webkit-touch-callout:none}
 @media (prefers-reduced-motion:reduce){.char img{animation:none}}
 </style>
 </head>
@@ -38,6 +42,16 @@ html,body{height:100%;margin:0;overflow:hidden;background:#12070a;font:16px/1.5 
   <div id="bubbles"></div>
 </div>
 <div id="empty">等待第一位到場的人…</div><div id="lj"></div>
+<script>
+/* 禁止縮放：這頁有大圖＋多層疊合，手機上縮放會讓瀏覽器重新繪製、吃光記憶體而被系統重新整理 */
+["gesturestart","gesturechange","gestureend"].forEach(e=>document.addEventListener(e,ev=>ev.preventDefault(),{passive:false}));
+document.addEventListener("touchmove",ev=>{ if(ev.touches.length>1||(ev.scale&&ev.scale!==1)) ev.preventDefault(); },{passive:false});
+</script>
+<script>
+document.addEventListener("selectstart",e=>{ if(!e.target.closest?.("#lj")) e.preventDefault(); });
+document.addEventListener("contextmenu",e=>{ if(!e.target.closest?.("#lj")) e.preventDefault(); });
+document.addEventListener("dragstart",e=>e.preventDefault());
+</script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getFirestore, collection, query, orderBy, limit, onSnapshot } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
@@ -50,10 +64,32 @@ const db = getFirestore(app);
 /* ---------- 場景座標：全部以 1920×1080 的畫布計算，再整體縮放進視窗 ---------- */
 const W=1920, H=1080, S=150;                               // S＝角色基準大小
 const $ = id => document.getElementById(id), world=$("world");
-let VK=1, VX=0, VY=0;
-function fit(){ VK=Math.min(innerWidth/W,innerHeight/H); VX=(innerWidth-W*VK)/2; VY=(innerHeight-H*VK)/2;
-  world.style.transform=`translate(${VX}px,${VY}px) scale(${VK})`; }
-fit(); addEventListener("resize", fit);
+let VK=1, VX=0, VY=0, BK=1;                               // BK＝整個舞台剛好放進視窗的基準縮放；VK/VX/VY＝目前實際（含鏡頭）的縮放與位移
+function fit(){ BK=Math.min(innerWidth/W,innerHeight/H); }
+fit(); let _rz=0; addEventListener("resize",()=>{ cancelAnimationFrame(_rz); _rz=requestAnimationFrame(fit); });
+
+/* ---------- 跟拍鏡頭：點角色 → 放大並跟著牠走；再點同一隻、點空白處、按 Esc 或超時 → 回到全景 ---------- */
+const ZOOM=2.6, FOLLOW_MS=12000;                           // ZOOM＝放大倍率；FOLLOW_MS＝自動回到全景的時間（設 0＝不自動回去）
+const cam={z:1,x:W/2,y:H/2}; let follow=null, followUntil=0, lastCam=performance.now(), lastTf="";
+const unfollow=()=>{ follow=null; };
+const followChar=c=>{ follow=c; followUntil=FOLLOW_MS?performance.now()+FOLLOW_MS:Infinity; };
+function camLoop(now){
+  const dt=Math.min(.1,Math.max(0,(now-lastCam)/1000)); lastCam=now;
+  if(follow && now>followUntil) follow=null;
+  const tz=follow?ZOOM:1, tx=follow?follow.x:W/2, ty=follow?follow.y-S*.55:H/2;   // 對準角色身體中段
+  const a=1-Math.exp(-dt*(follow?7:5));                    // 平滑追蹤
+  cam.z+=(tz-cam.z)*a; cam.x+=(tx-cam.x)*a; cam.y+=(ty-cam.y)*a;
+  const K=BK*cam.z; let X=innerWidth/2-cam.x*K, Y=innerHeight/2-cam.y*K;
+  X = W*K<=innerWidth  ? (innerWidth-W*K)/2  : Math.min(0,Math.max(innerWidth-W*K,X));    // 不讓畫面露出舞台外
+  Y = H*K<=innerHeight ? (innerHeight-H*K)/2 : Math.min(0,Math.max(innerHeight-H*K,Y));
+  VK=K; VX=X; VY=Y;
+  const tf=`translate(${X.toFixed(2)}px,${Y.toFixed(2)}px) scale(${K.toFixed(4)})`;
+  if(tf!==lastTf){ world.style.transform=tf; lastTf=tf; }
+  requestAnimationFrame(camLoop);
+}
+camLoop(performance.now());
+document.addEventListener("click",e=>{ if(follow && !e.target.closest(".char,.lh,#lj")) unfollow(); });
+addEventListener("keydown",e=>{ if(e.key==="Escape") unfollow(); });
 document.documentElement.style.setProperty("--s", S+"px");
 const rnd=(a,b)=>a+Math.random()*(b-a), pickOne=a=>a[Math.floor(Math.random()*a.length)];
 // 可走區域（座標是「腳底中心」）。舞台台面很薄，所以 y 範圍小；台下是整片地板
@@ -195,7 +231,9 @@ function addChar(id, d, entrance){
     c.role="new"; c.x=-140; c.y=rnd(880,1000); c.introP=getIntro(d).then(s=>(c.intro=s));
     goTo(c,FRONT.x+rnd(-260,260),rnd(880,950),"floor"); micQueue.push(c);
   }else{ const p=pickTarget(c,"floor"); c.x=p.x; c.y=p.y; }
-  el.addEventListener("click", async ()=>{                 // 點角色 → 再說一次自我介紹
+  el.addEventListener("click", async ()=>{                 // 點角色 → 鏡頭跟拍＋再說一次自我介紹；再點一次同一隻 → 回全景
+    if(follow===c){ unfollow(); return; }
+    followChar(c);
     if(c.role!=="free") return;
     if(!c.intro){ c.talking=true; c.bubble.style.display="block"; c.bubble.textContent="…"; c.intro=await getIntro(d); }
     typeText(c,c.intro,80,5000,true);

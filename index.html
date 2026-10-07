@@ -2,12 +2,19 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>今天的我是誰</title>
 <style>
 /* 色票與 display.html 對齊：酒紅黑底、暖米白字、暖粉棕副字、暖黃強調（聚光燈） */
 :root{--bg:#1a0b10;--stage:#0f0508;--ink:#f3f0e8;--sub:#c9a99a;--acc:#ffd23f;--line:#4a2430;--curtain:#4a1220;--curtain2:#3b0e1a}
 *{box-sizing:border-box}
+html,body{overflow-x:hidden;max-width:100%;touch-action:manipulation;-webkit-text-size-adjust:100%}
+input,textarea,select{font-size:16px!important} /* iOS 輸入框字級 <16px 會自動放大畫面 */
+main{min-width:0}
+#editBar{flex-wrap:wrap;justify-content:center}
+#editBar button{padding:10px 14px;white-space:nowrap}
+#editBar label{flex:1 1 100%!important;min-width:0}
+#editBar #doneEdit{flex:1 1 100%}
 html,body{height:100%;margin:0}
 body{background:radial-gradient(ellipse at 50% -5%,rgba(255,150,110,.22),transparent 60%),var(--bg);
   color:var(--ink);font:16px/1.5 "Noto Sans TC",system-ui,sans-serif;
@@ -36,6 +43,7 @@ main{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 18px 18p
 .checker{background:conic-gradient(#2a1119 25%,#351a22 0 50%,#2a1119 0 75%,#351a22 0) 0 0/24px 24px}
 #result{filter:none;animation:bob 2.6s ease-in-out infinite}   /* 和 display 一樣的上下浮動，預告牠上台的樣子 */
 @keyframes bob{50%{translate:0 -7px}}
+#ghostCanvas{position:absolute;max-width:100%;max-height:100%;display:none;opacity:.3;pointer-events:none;z-index:3}
 #editCanvas{position:absolute;max-width:100%;max-height:100%;display:none;touch-action:none;cursor:crosshair;z-index:4}
 #editHint{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:5;display:none;background:rgba(18,7,10,.85);padding:7px 12px;border-radius:999px;color:var(--ink);font-size:13px;white-space:nowrap}
 .bar{display:flex;gap:10px;align-items:center}
@@ -43,6 +51,19 @@ button,label.btn{font:inherit;font-weight:700;border:0;border-radius:999px;paddi
   background:var(--line);color:var(--ink);text-align:center}
 button.main{background:var(--acc);color:#1a1a1a;flex:1}
 button:disabled{opacity:.4}
+/* 按下回饋：所有按鈕按下時微縮＋變亮 */
+button,label.btn{transition:transform .08s,filter .08s,background-color .12s,box-shadow .12s}
+button:active:not(:disabled),label.btn:active{transform:scale(.94);filter:brightness(1.25)}
+/* 目前選取的工具：黃底＋外框光暈＋下沉感 */
+button.tool.on{background:var(--acc);color:#1a1a1a;box-shadow:0 0 0 3px rgba(255,210,63,.35),inset 0 3px 6px rgba(0,0,0,.35);transform:translateY(1px)}
+button.tool.on:active{transform:scale(.94) translateY(1px)}
+button.flash{animation:flash .28s}
+@keyframes flash{0%{background:var(--acc);color:#1a1a1a;transform:scale(.92)}100%{}}
+/* 關閉網頁式的文字選取、長按選單與點擊藍框；輸入框例外 */
+*{-webkit-tap-highlight-color:transparent}
+body,button,label,.stage,header,.chip{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+input[type=text],textarea{-webkit-user-select:text;user-select:text}
+img,canvas{-webkit-user-drag:none;-webkit-touch-callout:none}
 button:focus-visible,label.btn:focus-within{outline:3px solid var(--acc);outline-offset:2px}
 .shutter{width:72px;height:72px;padding:0;border-radius:50%;background:var(--ink);
   border:5px solid var(--bg);box-shadow:0 0 0 3px var(--ink),0 0 22px rgba(255,210,63,.3);margin:0 auto}
@@ -81,8 +102,9 @@ button:focus-visible,label.btn:focus-within{outline:3px solid var(--acc);outline
     <div id="cam"><video id="video" playsinline muted autoplay></video>
       <div id="frame"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i><i class="dot"></i></div></div>
     <canvas id="result" class="hide"></canvas>
+    <canvas id="ghostCanvas"></canvas>
     <canvas id="editCanvas"></canvas>
-    <div id="editHint">塗掉多餘的地方；長按／滑動即可修改</div>
+    <div id="editHint">擦除多餘處；「恢復」可塗回淡淡看到的原圖</div>
     <div class="spin" id="spin"><span id="spinTxt">處理中…</span></div>
     <div id="bar"></div>
   </div>
@@ -105,8 +127,8 @@ button:focus-visible,label.btn:focus-within{outline:3px solid var(--acc);outline
     <button class="main" id="alive">賦予生命</button>
   </div>
   <div class="bar hide" id="editBar">
-    <button id="erase">🧹 擦除</button>
-    <button id="restore">🖌 恢復</button>
+    <button id="erase" class="tool on">🧹 擦除</button>
+    <button id="restore" class="tool">🖌 恢復</button>
     <button id="undo">↩ 復原</button>
     <label style="display:flex;align-items:center;gap:8px;flex:1;color:var(--sub);font-size:13px">筆刷 <input id="brush" type="range" min="8" max="100" value="32" style="flex:1;accent-color:var(--acc)"><span id="brushV">32</span></label>
     <button id="doneEdit" class="main">完成</button>
@@ -132,6 +154,10 @@ button:focus-visible,label.btn:focus-within{outline:3px solid var(--acc);outline
     <button class="main" id="again">再做一個</button>
   </div></div>
 </div></div>
+<script>
+["gesturestart","gesturechange","gestureend"].forEach(e=>document.addEventListener(e,ev=>ev.preventDefault(),{passive:false}));
+document.addEventListener("touchmove",ev=>{if(ev.touches.length>1)ev.preventDefault()},{passive:false});
+</script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
@@ -331,7 +357,7 @@ function frameCrop(src,w,h){
 }
 
 /* ---------- 自動分割：以取景框中央為選取點 ---------- */
-let photo, curMask=null, mW=0, mH=0, cutCanvas=null;
+let photo, curMask=null, mW=0, mH=0, cutCanvas=null, cutBox=null;
 const spin = (on,t) => { $("spin").style.display = on ? "flex":"none"; if(t) $("spinTxt").textContent=t; };
 const R = $("result");
 
@@ -362,7 +388,7 @@ async function cloudRemoveBackground(){
 
 /* ---------- 手動修整：直接在透明去背結果上擦除／恢復 ---------- */
 let editMode=false, editTool="erase", editHistory=[], editDrawing=false, editLast=null;
-const EC=$("editCanvas"), ECTX=EC.getContext("2d");
+const EC=$("editCanvas"), ECTX=EC.getContext("2d"), GC=$("ghostCanvas");
 function syncEditCanvas(){
   if(!cutCanvas) return;
   EC.width=cutCanvas.width; EC.height=cutCanvas.height;
@@ -372,6 +398,7 @@ function syncEditCanvas(){
   const scale=Math.min(1, sw/cutCanvas.width, sh/cutCanvas.height);
   EC.style.width=Math.max(1,Math.round(cutCanvas.width*scale))+"px";
   EC.style.height=Math.max(1,Math.round(cutCanvas.height*scale))+"px";
+  GC.style.width=EC.style.width; GC.style.height=EC.style.height;
 }
 function pushEditHistory(){
   if(!cutCanvas) return;
@@ -415,25 +442,55 @@ function paintAt(a,b){
   ECTX.beginPath(); ECTX.moveTo(a.x,a.y); ECTX.lineTo(b.x,b.y); ECTX.stroke();
   ECTX.restore();
 }
-let originalCutSource=null;
+let originalCutSource=null, cutBackup=null, editScale=0;
 function openEditor(){
   if(!cutCanvas) return;
-  originalCutSource=mkC(cutCanvas.width,cutCanvas.height);
-  originalCutSource.getContext("2d").drawImage(cutCanvas,0,0);
-  editHistory=[]; editMode=true; editTool="erase";
+  let box=cutBox;
+  if(!box && photo){  // 雲端去背：結果若與原照片同比例，視為涵蓋整張照片
+    const pa=photo.width/photo.height, ca=cutCanvas.width/cutCanvas.height;
+    if(Math.abs(pa/ca-1)<0.02) box={x:0,y:0,w:photo.width,h:photo.height};
+  }
+  cutBackup=cutCanvas; editScale=0;
+  if(box){
+    // 以「整張原始照片」為工作區：恢復筆刷從原照片取色，被去掉的地方也能塗回來
+    const s=cutCanvas.width/box.w, W=Math.max(1,Math.round(photo.width*s)), H=Math.max(1,Math.round(photo.height*s));
+    editScale=s;
+    originalCutSource=mkC(W,H); const ox=originalCutSource.getContext("2d");
+    ox.imageSmoothingQuality="high"; ox.drawImage(photo,0,0,W,H);
+    const wk=mkC(W,H); wk.getContext("2d").drawImage(cutCanvas,Math.round(box.x*s),Math.round(box.y*s),cutCanvas.width,cutCanvas.height);
+    cutCanvas=wk;
+    GC.width=W; GC.height=H; GC.getContext("2d").drawImage(originalCutSource,0,0); GC.style.display="block";
+  }else{
+    originalCutSource=mkC(cutCanvas.width,cutCanvas.height);
+    originalCutSource.getContext("2d").drawImage(cutCanvas,0,0);
+  }
+  editHistory=[]; editMode=true; editTool="erase"; markTool();
   R.classList.add("hide"); EC.style.display="block"; $("editHint").style.display="block";
-  $("resBar").classList.add("hide"); $("editBar").classList.remove("hide");
+  $("resBar").classList.add("hide"); $("editBar").classList.remove("hide"); $("sliderRow").style.display="none";
   syncEditCanvas();
   setStatus("手動修整：塗掉多餘的地方");
 }
 function closeEditor(){
   if(!editMode) return;
   editMode=false;
-  cutCanvas=mkC(EC.width,EC.height);
-  cutCanvas.getContext("2d").drawImage(EC,0,0);
-  EC.style.display="none";
+  if(editScale){
+    const W=EC.width,H=EC.height,id=ECTX.getImageData(0,0,W,H).data;
+    let x0=1e9,y0=1e9,x1=-1,y1=-1;
+    for(let i=0;i<W*H;i++) if(id[i*4+3]>40){const x=i%W,y=(i/W)|0; if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
+    if(x1<0){ cutCanvas=cutBackup; }   // 全被擦光：保留修整前的結果
+    else{
+      const c=mkC(x1-x0+1,y1-y0+1); c.getContext("2d").drawImage(EC,x0,y0,c.width,c.height,0,0,c.width,c.height);
+      cutBox={x:x0/editScale,y:y0/editScale,w:c.width/editScale,h:c.height/editScale};
+      cutCanvas=c;
+    }
+  }else{
+    cutCanvas=mkC(EC.width,EC.height);
+    cutCanvas.getContext("2d").drawImage(EC,0,0);
+  }
+  cutBackup=null; editScale=0;
+  EC.style.display="none"; GC.style.display="none";
   R.classList.remove("hide"); $("editHint").style.display="none";
-  $("editBar").classList.add("hide"); $("resBar").classList.remove("hide");
+  $("editBar").classList.add("hide"); $("resBar").classList.remove("hide"); $("sliderRow").style.display="flex";
   render();
   setStatus("修整完成");
 }
@@ -443,9 +500,15 @@ EC.addEventListener("pointerup",e=>{ editDrawing=false; editLast=null; });
 EC.addEventListener("pointercancel",e=>{ editDrawing=false; editLast=null; });
 $("edit").onclick=openEditor;
 $("doneEdit").onclick=closeEditor;
-$("erase").onclick=()=>{editTool="erase";setStatus("手動修整：擦除模式");};
-$("restore").onclick=()=>{editTool="restore";setStatus("手動修整：恢復模式");};
-$("undo").onclick=()=>{if(editHistory.length)applyEditHistory();};
+function markTool(){ $("erase").classList.toggle("on",editTool==="erase"); $("restore").classList.toggle("on",editTool==="restore"); }
+$("erase").onclick=()=>{editTool="erase";markTool();setStatus("手動修整：擦除模式");};
+$("restore").onclick=()=>{editTool="restore";markTool();setStatus("手動修整：恢復模式");};
+$("undo").onclick=()=>{
+  const b=$("undo"); b.classList.remove("flash"); void b.offsetWidth; b.classList.add("flash");
+  if(editHistory.length){ applyEditHistory(); setStatus("已復原上一步"); } else setStatus("沒有可以復原的步驟");
+};
+document.addEventListener("selectstart",e=>{ if(!e.target.closest?.("input,textarea")) e.preventDefault(); });
+document.addEventListener("contextmenu",e=>{ if(!e.target.closest?.("input,textarea")) e.preventDefault(); });
 $("brush").oninput=()=>$("brushV").textContent=$("brush").value;
 window.addEventListener("resize",()=>{if(editMode)syncEditCanvas();});
 
@@ -479,6 +542,7 @@ function buildCut(){
   const id=fx.getImageData(0,0,W,H); let x0=1e9,y0=1e9,x1=-1,y1=-1;
   for(let i=0;i<W*H;i++) if(id.data[i*4+3]>40){const x=i%W,y=(i/W)|0; if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
   if(x1<0) return null;
+  cutBox={x:x0,y:y0,w:x1-x0+1,h:y1-y0+1};
   const c=mkC(x1-x0+1,y1-y0+1); c.getContext("2d").drawImage(full,x0,y0,c.width,c.height,0,0,c.width,c.height);
   const k=Math.min(1,440/Math.max(c.width,c.height));
   if(k===1) return c;
@@ -497,7 +561,7 @@ let busy=false;
 async function run(p){
   if(mode==="ai" && !model){ setStatus("本機 SAM 模型還在載入，請稍候"); loadModel().catch(e=>setStatus("模型載入失敗："+(e.message||e))); return; }
   if(busy) return; busy=true;
-  photo=p; spin(true, mode==="cloud" ? "雲端 AI 去背中…" : "剪下主體中…");
+  photo=p; cutBox=null; spin(true, mode==="cloud" ? "雲端 AI 去背中…" : "剪下主體中…");
   $("video").pause?.();
   await new Promise(r=>setTimeout(r,60));
   try{
