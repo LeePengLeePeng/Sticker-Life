@@ -2,7 +2,7 @@
 
 **一個讓每位參加者把自己的創作，變成舞台上會動、會說話的角色的即時互動作品。**
 
-拍下一張插畫或一個小物 → 自動去背成貼紙 → 取名字、選個性 → 在大螢幕上登場，由 AI 為牠生成專屬的自我介紹。
+拍下一張插畫或一個小物 → 自動去背成貼紙 → 取名字、選個性 → 在大螢幕上登場，由 AI 為他生成專屬的自我介紹。
 
 🔗 **線上體驗**
 - 📱 拍照端（用手機開）：<https://leepengleepeng.github.io/Sticker-Life/>
@@ -17,8 +17,6 @@
 ---
 
 ## 專案概念
-
-多數互動展示是「觀眾看」，參與完就結束了，什麼也沒留下。
 
 這個作品的理念是：**讓參與的人不只是旁觀者，而是真的成為作品的一部分，並且留下自己參與過的紀錄。**
 
@@ -137,19 +135,19 @@
 <table>
   <tr>
     <td align="center" valign="bottom">
-      <img src="screenshots/01_camera.png" height="400"><br>
+      <img src="screenshots/01_camera.PNG" height="400"><br>
       <sub><b>拍照取景</b></sub>
     </td>
     <td align="center" valign="bottom">
-      <img src="screenshots/02_result.png" height="400"><br>
+      <img src="screenshots/02_result.PNG" height="400"><br>
       <sub><b>去背結果</b></sub>
     </td>
     <td align="center" valign="bottom">
-      <img src="screenshots/03_edit.png" height="400"><br>
+      <img src="screenshots/03_edit.PNG" height="400"><br>
       <sub><b>手動修整</b></sub>
     </td>
     <td align="center" valign="bottom">
-      <img src="screenshots/04_name.png" height="400"><br>
+      <img src="screenshots/04_name.PNG" height="400"><br>
       <sub><b>賦予生命</b></sub>
     </td>
   </tr>
@@ -160,11 +158,11 @@
 <table>
   <tr>
     <td align="center" valign="bottom">
-      <img src="screenshots/05_stage.png" height="220"><br>
+      <img src="screenshots/05_stage.PNG" height="220"><br>
       <sub><b>舞台全景</b></sub>
     </td>
     <td align="center" valign="bottom">
-      <img src="screenshots/06_follow.png" height="220"><br>
+      <img src="screenshots/06_follow.PNG" height="220"><br>
       <sub><b>鏡頭跟拍</b></sub>
     </td>
   </tr>
